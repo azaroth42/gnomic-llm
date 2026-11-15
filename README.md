@@ -4,7 +4,8 @@ Large language models play **Gnomic Mau**, a card game whose rules are hidden. T
 has to work out the hidden rules from the public record of plays and penalty calls, play
 legally, and judge other players' plays correctly. The rules are simple; the game is hard.
 
-The game draws on *Mao* (a card game whose rules are kept secret) and *Nomic* (a game in which
+The game draws on [*Mao*](https://en.wikipedia.org/wiki/Mao_(card_game)) (a card game whose rules
+are kept secret) and [*Nomic*](https://boardgamegeek.com/boardgame/14451/nomic) (a game in which
 changing the rules is a move). After each game the winner adds a new secret rule, so the game
 keeps changing under the players' feet.
 
@@ -161,6 +162,11 @@ A 4-LLM game of about 80 turns makes roughly 320 calls. Judging calls run in par
 | `gnomic/server.py`, `gnomic/static/` | Spectator UI |
 
 [`CLAUDE.md`](CLAUDE.md) records every design decision in detail.
+
+## References
+
+- *Mao* (card game): https://en.wikipedia.org/wiki/Mao_(card_game)
+- *Nomic* (Peter Suber's game of self-amendment): https://boardgamegeek.com/boardgame/14451/nomic
 
 ## License
 
