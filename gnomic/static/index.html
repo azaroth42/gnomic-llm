@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gnomic Mau — spectator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e3e1da;
+    --accent: #2f6fde; --accent-soft: #e5eefc; --good: #1f8a4c; --good-soft: #e3f4ea;
+    --bad: #c4392f; --bad-soft: #fbe7e5; --warn: #b26a00; --warn-soft: #fdf0dc;
+    --red-suit: #c4392f; --black-suit: #1d1d1f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151517; --panel: #1f1f22; --ink: #ececef; --muted: #9a9aa2; --line: #2e2e33;
+      --accent: #6c9cff; --accent-soft: #1d2a44; --good: #4cc483; --good-soft: #17301f;
+      --bad: #ff6b5e; --bad-soft: #3a1c1a; --warn: #f0a742; --warn-soft: #3a2c14;
+      --red-suit: #ff6b5e; --black-suit: #ececef;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px; background: var(--panel);
+           border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; }
+  header .where { color: var(--muted); font-variant-numeric: tabular-nums; }
+  header .spacer { flex: 1; }
+  header label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .conn { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); display: inline-block; }
+  .conn.on { background: var(--good); }
+
+  #players { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; padding: 14px 18px 0; }
+  .player { background: var(--panel); border: 2px solid var(--line); border-radius: 10px; padding: 10px 12px;
+            transition: border-color .2s, box-shadow .2s; min-width: 0; }
+  .player.turn { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  .player.judging:not(.turn) { border-color: var(--warn); border-style: dashed; }
+  .badge.turn { background: var(--accent); color: #fff; font-weight: 700; }
+  .player .top { display: flex; align-items: baseline; gap: 6px; }
+  .player .seat { font-weight: 700; color: var(--accent); }
+  .player .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player .model { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent);
+           white-space: nowrap; }
+  .badge.bad { background: var(--bad-soft); color: var(--bad); }
+  .badge.good { background: var(--good-soft); color: var(--good); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .badge.muted { background: var(--line); color: var(--muted); }
+  .status { margin: 6px 0; min-height: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .status.thinking { color: var(--accent); }
+  .status.judging { color: var(--warn); }
+  .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+                 margin-right: 6px; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .player .meta { color: var(--muted); font-size: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .player .hand { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 3px; }
+
+  .card { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 40px;
+          padding: 0 4px; border-radius: 5px; border: 1px solid var(--line); background: var(--panel);
+          font-weight: 700; font-size: 14px; }
+  .card.sm { min-width: 26px; height: 30px; font-size: 12px; }
+  .card.lg { min-width: 64px; height: 88px; font-size: 26px; border-width: 2px; }
+  .card.r { color: var(--red-suit); } .card.b { color: var(--black-suit); }
+  .card.illegal { outline: 3px solid var(--bad); }
+  /* DISCARD cards that drew penalty calls */
+  .card.pen { position: relative; }
+  .card.pen::after { position: absolute; top: -7px; right: -6px; font-size: 10px; line-height: 14px; min-width: 14px;
+                     padding: 0 2px; border-radius: 7px; text-align: center; color: #fff; font-weight: 700; }
+  .card.pen-upheld { outline: 3px solid var(--bad); outline-offset: -1px; background: var(--bad-soft); z-index: 1; }
+  .card.pen-upheld::after { content: "!"; background: var(--bad); }
+  .card.pen-rejected { outline: 3px solid var(--warn); outline-offset: -1px; background: var(--warn-soft); z-index: 1; }
+  .card.pen-rejected::after { content: "✗"; background: var(--warn); }
+  .card.pen-missed { outline: 2px dashed var(--bad); outline-offset: -1px; z-index: 1; }
+  .card.pen-missed::after { content: "?"; background: var(--muted); }
+  .legend { margin-top: 8px; display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; align-items: center; }
+  .legend .card { margin-right: 4px; }
+  .card.inline { height: auto; min-width: 0; padding: 0 4px; font-size: inherit; border-radius: 4px; }
+
+  .grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 14px; padding: 14px 18px 18px; }
+  @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  section.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+  .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+  #table .row { display: flex; gap: 22px; align-items: flex-end; flex-wrap: wrap; }
+  .pile-label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  .deck { width: 64px; height: 88px; border-radius: 6px; border: 2px solid var(--line);
+          background: repeating-linear-gradient(45deg, var(--accent-soft), var(--accent-soft) 6px, var(--panel) 6px, var(--panel) 12px);
+          display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 18px; }
+  .discard { display: flex; align-items: flex-end; }
+  .discard .card { margin-left: -4px; }
+  .discard .card:first-child { margin-left: 0; }
+  .banner { margin-top: 12px; padding: 8px 10px; border-radius: 8px; background: var(--bg); min-height: 38px; }
+  .banner.bad { background: var(--bad-soft); } .banner.good { background: var(--good-soft); } .banner.warn { background: var(--warn-soft); }
+
+  #rules ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  #rules li { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); display: flex; gap: 8px; align-items: baseline; }
+  #rules li.forbade { border-color: var(--bad); background: var(--bad-soft); }
+  #rules li.allowed { border-color: var(--good); background: var(--good-soft); }
+  #rules .num { font-weight: 700; }
+  #rules .owner { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+  #log .entries, #reasoning .entries { max-height: 520px; overflow-y: auto; }
+  #log .e { padding: 5px 0; border-bottom: 1px solid var(--line); display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
+  #log .e.sys { color: var(--muted); font-style: italic; }
+  .t { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; min-width: 56px; }
+
+  #reasoning .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  #reasoning .tabs button.active { background: var(--accent); color: white; border-color: var(--accent); }
+  #reasoning .tabs .live { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn);
+                           margin-left: 6px; animation: pulse 1s infinite; }
+  .notes { background: var(--accent-soft); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; white-space: pre-wrap; }
+  .notes h3 { margin: 0 0 4px; font-size: 12px; color: var(--accent); text-transform: uppercase; letter-spacing: .05em; }
+  .r-entry { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+  .r-entry.pending { border-style: dashed; border-color: var(--accent); }
+  .r-head { display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; margin-bottom: 4px; }
+  .r-body { white-space: pre-wrap; word-wrap: break-word; }
+  details { margin-top: 4px; } summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  details pre { white-space: pre-wrap; word-wrap: break-word; margin: 4px 0 0; font: inherit; color: var(--muted); }
+  .private-note { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+
+  #summary { display: none; }
+  #summary.show { display: block; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 13px; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Gnomic Mau</h1>
+  <span class="conn" id="conn" title="connection"></span>
+  <span class="where" id="where">waiting for match…</span>
+  <span class="spacer"></span>
+  <label><input type="checkbox" id="showHands" checked> show hands</label>
+  <label>delay <input type="range" id="delay" min="0" max="3" step="0.25" value="0"> <span id="delayVal">0s</span></label>
+  <button id="pause">Pause</button>
+  <button id="stop">Stop</button>
+</header>
+
+<div id="players"></div>
+
+<div class="grid">
+  <div class="col">
+    <section class="panel" id="table">
+      <h2>Table</h2>
+      <div class="row">
+        <div><div class="pile-label">DECK</div><div class="deck" id="deck">–</div></div>
+        <div style="min-width:0"><div class="pile-label">DISCARD (bottom → top, last 12)</div><div class="discard" id="discard"></div></div>
+      </div>
+      <div class="legend" id="legend"></div>
+      <div class="banner" id="banner"><span class="empty">No plays yet.</span></div>
+    </section>
+    <section class="panel" id="rules">
+      <h2>Rules in effect <span style="text-transform:none;letter-spacing:0">(hidden from players; later rules take precedence)</span></h2>
+      <ol id="ruleList"><li class="empty">No rules yet.</li></ol>
+    </section>
+    <section class="panel" id="summary">
+      <h2>Match summary</h2>
+      <div id="summaryBody"></div>
+    </section>
+    <section class="panel" id="log">
+      <h2>Play log (newest first)</h2>
+      <div class="entries" id="logEntries"></div>
+    </section>
+  </div>
+  <div class="col">
+    <section class="panel" id="reasoning">
+      <h2>Reasoning logs</h2>
+      <div class="private-note">Each player's private reasoning and notes. Spectators only: other players never see these.</div>
+      <div class="tabs" id="tabs"></div>
+      <div id="notes"></div>
+      <div class="entries" id="rEntries"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+"use strict";
+const SUIT = { S: "♠", H: "♥", D: "♦", C: "♣" };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function cardHTML(code, cls = "") {
+  if (!code) return `<span class="card ${cls} b">∅</span>`;
+  const suit = code.slice(-1), rank = code.slice(0, -1);
+  const color = suit === "H" || suit === "D" ? "r" : "b";
+  return `<span class="card ${cls} ${color}" title="${esc(code)}">${esc(rank)}${SUIT[suit] || esc(suit)}</span>`;
+}
+const P = (seat) => `P${seat + 1}`;
+const fmtSecs = (s) => s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m ${String(Math.floor(s % 60)).padStart(2, "0")}s`;
+const fmtTok = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0);
+
+let S, offset = 0, dirty = true, selectedTab = null;
+$("legend").innerHTML = [["7H", "upheld", "penalty upheld: player drew"], ["7S", "rejected", "only false calls: caller(s) drew"],
+  ["7D", "missed", "illegal, nobody called (spectators only)"]]
+  .map(([c, m, t]) => `<span><span class="card sm b pen pen-${m}">&nbsp;</span>${t}</span>`).join("");
+
+function reset() {
+  S = {
+    players: [], dealer: null, numGames: 0, game: null, turn: null, rules: [], discard: [], deck: null,
+    hands: {}, handSizes: [], scores: [], status: {}, current: null, log: [], reasoning: {}, notes: {},
+    lastPlay: null, summary: null, controls: { paused: false, delay: 0 }, ended: false,
+    marks: {}, round: null, maxRounds: null,
+  };
+  dirty = true;
+}
+reset();
+
+function nameOf(seat) { return S.players[seat]?.name ?? P(seat); }
+function seatOf(name) { return S.players.findIndex((p) => p.name === name); }
+function pushReasoning(name, entry) { (S.reasoning[name] ||= []).push(entry); if (entry.notes) S.notes[name] = entry.notes; }
+
+function apply(ev) {
+  switch (ev.type) {
+    case "hello":
+      reset();
+      offset = ev.server_now - Date.now() / 1000;
+      if (ev.controls) S.controls = ev.controls;
+      break;
+    case "match_start":
+      S.players = ev.players; S.dealer = ev.dealer; S.numGames = ev.num_games;
+      S.scores = ev.players.map(() => 0);
+      if (!selectedTab && ev.players.length) selectedTab = (ev.players.find((p) => p.kind === "llm") || ev.players[0]).name;
+      S.log.push({ sys: true, text: `Match start: ${ev.players.length} players, ${ev.num_games} games. Dealer: ${P(ev.dealer)} ${ev.dealer_name}.` });
+      break;
+    case "rule_added":
+      S.rules = ev.stack;
+      S.log.push({ sys: true, text: `Rule R${ev.number} added, owned by ${P(ev.owner_seat)} ${ev.owner} (${ev.after_game < 0 ? "dealer" : "winner of G" + (ev.after_game + 1)}): “${ev.rule.description}”` });
+      break;
+    case "rule_proposed":
+      S.log.push({ sys: true, text: `${P(ev.owner_seat)} ${ev.owner} proposes a rule (attempt ${ev.attempt}): “${ev.text}”` });
+      pushReasoning(ev.owner, { kind: "rule", game: ev.after_game + 1, text: ev.text, reasoning: ev.reasoning,
+        notes: ev.notes, meta: ev.meta || {} });
+      break;
+    case "rule_coded":
+      S.log.push({ sys: true, text: `Coding model implemented it as a ${ev.rule.kind}: “${ev.rule.description}”` });
+      break;
+    case "rule_rejected":
+      S.log.push({ sys: true, text: `Rule proposal by ${ev.owner} rejected (${ev.stage}): ${ev.reason}` });
+      break;
+    case "rule_fallback":
+      S.log.push({ sys: true, text: `${ev.owner}: ${ev.reason}` });
+      break;
+    case "rule_skipped":
+      S.log.push({ sys: true, text: `No rule added for ${ev.owner}: ${ev.reason}` });
+      break;
+    case "game_start":
+      S.game = ev.game; S.turn = 0; S.discard = [ev.top]; S.deck = ev.deck_size; S.hands = ev.hands;
+      S.handSizes = S.players.map((p) => (ev.hands[p.name] || []).length);
+      S.status = {}; S.lastPlay = null; S.current = null; S.marks = {}; S.round = 0; S.table = ev.table || null;
+      S.log.push({ sys: true, text: `Game ${ev.game + 1} starts. First player ${P(ev.starting_player)}. DISCARD starts with ${ev.top}. Rules in effect: ${ev.num_rules}.${ev.mechanics ? " Table mechanics are on." : ""}` });
+      break;
+    case "turn_start":
+      S.turn = ev.turn; S.current = ev.seat; S.hands[ev.player] = ev.hand;
+      if (ev.round !== undefined) { S.round = ev.round; S.maxRounds = ev.max_rounds; }
+      for (const k of Object.keys(S.status)) delete S.status[k];
+      S.status[ev.seat] = { mode: "thinking", since: ev.ts, what: "Choosing a card" };
+      break;
+    case "play": {
+      S.status[ev.seat] = { mode: "played", card: ev.card, selfCall: ev.self_call, rule: ev.self_call_rule };
+      S.lastPlay = { ...ev, calls: {}, resolved: false };
+      const deciding = ev.deciding_rule_index;
+      pushReasoning(ev.player, { kind: "play", game: ev.game, turn: ev.turn, card: ev.card, top: ev.top_before,
+        legal: ev.legal, selfCall: ev.self_call, selfRule: ev.self_call_rule, forced: ev.forced, elapsed: ev.elapsed, reasoning: ev.reasoning,
+        notes: ev.notes, meta: ev.meta || {}, deciding });
+      break;
+    }
+    case "call_phase":
+      for (const name of ev.callers) {
+        const s = seatOf(name);
+        S.status[s] = { mode: "judging", since: ev.ts, what: `Judging ${P(ev.seat)}'s ${ev.card}` };
+      }
+      break;
+    case "call": {
+      S.status[ev.seat] = { mode: "called", penalty: ev.penalty, rule: ev.rule, forced: ev.forced };
+      if (S.lastPlay) S.lastPlay.calls[ev.seat] = ev.penalty;
+      const lp = S.lastPlay;
+      pushReasoning(ev.player, { kind: "call", game: ev.game, turn: ev.turn, penalty: ev.penalty, forced: ev.forced,
+        target: lp ? `${P(lp.seat)} plays ${lp.card} on ${lp.top_before || "empty"}` : "", legal: lp ? lp.legal : null,
+        // players police their own rules: a call is right iff the play broke this judge's rule
+        mine: lp && lp.violated_owners ? lp.violated_owners.includes(ev.seat) : (lp ? !lp.legal : null),
+        rule: ev.rule, broken: lp ? lp.broken_rules : null,
+        elapsed: ev.elapsed, reasoning: ev.reasoning, notes: ev.notes, meta: ev.meta || {} });
+      break;
+    }
+    case "draw": {
+      (S.hands[ev.player] ||= []).push(ev.card);
+      S.handSizes[ev.seat] = ev.hand_size; S.deck = ev.deck_size;
+      break;
+    }
+    case "reshuffle":
+      S.discard = ev.top ? [ev.top] : []; S.deck = ev.deck_size;
+      S.log.push({ sys: true, text: `G${ev.game + 1} T${ev.turn + 1}: DECK empty, DISCARD shuffled into a new DECK (${ev.deck_size} cards); ${ev.top} stays on DISCARD.` });
+      break;
+    case "resolution": {
+      const actor = nameOf(ev.seat);
+      const h = S.hands[actor];
+      const lp = S.lastPlay || {};
+      if (h) for (const c of (lp.move?.cards || [ev.card])) { const i = h.indexOf(c); if (i >= 0) h.splice(i, 1); }
+      S.discard = ev.discard; S.handSizes = ev.hand_sizes; S.deck = ev.deck_size;
+      if (ev.table) S.table = ev.table;
+      Object.assign(lp, { resolved: true, callers: ev.callers, upheld: ev.upheld, missed: ev.missed, penalized: ev.penalized,
+        engineCall: ev.engine_call, effects: ev.effects || [],
+        upheldBy: ev.upheld_by || (ev.upheld ? ev.callers : []), rejected: ev.rejected || (ev.upheld ? [] : ev.callers || []),
+        owners: ev.violated_owners || [], callRules: ev.call_rules || {} });
+      S.lastPlay = lp;
+      // Mark the card on DISCARD by what its play cost (a card can come back after a reshuffle).
+      const mark = ev.callers?.length ? (ev.upheld ? "upheld" : "rejected") : ev.missed ? "missed" : null;
+      if (mark) S.marks[ev.card] = { mark, turn: ev.turn, seat: ev.seat, upheldBy: lp.upheldBy, rejected: lp.rejected,
+                                     missed: ev.missed, callRules: lp.callRules };
+      else delete S.marks[ev.card];
+      S.log.push({ play: true, ...lp, game: ev.game, turn: ev.turn });
+      break;
+    }
+    case "no_cards":
+      S.log.push({ sys: true, text: `G${ev.game + 1} T${ev.turn + 1}: ${P(ev.seat)} ${ev.player} has no cards, so plays none.` });
+      break;
+    case "win_rule":
+      S.log.push({ sys: true, text: `${P(ev.seat)} meets win condition R${ev.rule_index + 1} at the end of their turn: “${ev.rule}” (hand: ${(ev.hand || []).join(" ") || "empty"})` });
+      break;
+    case "effects":
+      if (ev.table) S.table = ev.table;
+      if (ev.hands) Object.assign(S.hands, ev.hands);
+      break;
+    case "game_end":
+      if (ev.winner !== null && ev.winner !== undefined) S.scores[ev.winner] = (S.scores[ev.winner] || 0) + 1;
+      S.status = {}; S.current = null;
+      S.log.push({ sys: true, text: ev.winner === null ? `Game ${ev.game + 1} ends with no winner (round limit: ${ev.turns} turns).` : `Game ${ev.game + 1} won by ${P(ev.winner)} ${ev.winner_name} after ${ev.turns} turns${ev.reason && ev.reason.startsWith("win_rule") ? ` (win condition ${ev.reason.split(" ")[1]})` : ""}.` });
+      break;
+    case "match_end":
+      S.summary = ev.summary; S.ended = true; S.status = {}; S.current = null;
+      S.log.push({ sys: true, text: ev.summary.stopped ? "Match stopped." : "Match over." });
+      break;
+    case "controls":
+      S.controls = { paused: ev.paused, delay: ev.delay };
+      break;
+  }
+  dirty = true;
+}
+
+// ---------------------------------------------------------------- rendering
+
+function renderHeader() {
+  const g = S.game === null ? "–" : `${S.game + 1}/${S.numGames}`;
+  const t = S.turn === null ? "–" : S.turn + 1;
+  const who = S.current !== null && S.current !== undefined ? ` · now: ${P(S.current)} ${esc(nameOf(S.current))}` : "";
+  const r = S.round !== null && S.maxRounds ? ` · Round ${S.round + 1}/${S.maxRounds}` : "";
+  $("where").innerHTML = S.players.length ? `Game ${g} · Turn ${t}${r}${who}${S.controls.paused ? " · <b>PAUSED</b>" : ""}${S.ended ? " · finished" : ""}` : "waiting for match…";
+  $("pause").textContent = S.controls.paused ? "Resume" : "Pause";
+  $("delay").value = S.controls.delay; $("delayVal").textContent = `${S.controls.delay}s`;
+}
+
+function statusHTML(seat, now) {
+  const st = S.status[seat];
+  if (!st) return "";
+  if (st.mode === "thinking" || st.mode === "judging") {
+    const secs = Math.max(0, now - st.since);
+    return `<div class="status ${st.mode}"><span class="dot"></span>${st.mode === "thinking" ? "Thinking" : "Judging"} <span data-since="${st.since}">${fmtSecs(secs)}</span><div style="font-weight:400;font-size:12px;color:var(--muted)">${esc(st.what)}</div></div>`;
+  }
+  if (st.mode === "played") return `<div class="status">Played ${cardHTML(st.card, "sm")}${st.selfCall ? ` <span class="badge bad">self-call: PENALTY${st.rule ? " R" + st.rule : ""}</span>` : ""}</div>`;
+  if (st.mode === "called") return `<div class="status">${st.penalty ? `<span class="badge bad">PENALTY${st.rule ? " R" + st.rule : ""}!</span>` : '<span class="badge muted">no call</span>'}${st.forced ? ' <span class="badge warn">no valid answer</span>' : ""}</div>`;
+  return "";
+}
+
+function renderPlayers(now) {
+  const show = $("showHands").checked;
+  $("players").innerHTML = S.players.map((p, i) => {
+    const st = S.status[i];
+    const cls = [i === S.current ? "turn" : "", st?.mode === "judging" ? "judging" : ""].join(" ");
+    const owned = S.rules.map((r, k) => r.owner === p.name ? `R${k + 1}` : null).filter(Boolean);
+    const hand = (S.hands[p.name] || []).slice().sort();
+    return `<div class="player ${cls}">
+      <div class="top"><span class="seat">${P(i)}</span><span class="name">${esc(p.name)}</span>
+        ${i === S.current ? '<span class="badge turn">TURN</span>' : ""}
+        ${i === S.dealer ? '<span class="badge">dealer</span>' : ""}
+        ${p.kind !== "llm" ? `<span class="badge muted">${esc(p.kind)}</span>` : ""}
+        ${owned.length ? '<span class="badge warn" title="owns a rule, so may call penalties">judge</span>'
+                       : '<span class="badge muted" title="owns no rules, so cannot call penalties">can\'t call</span>'}</div>
+      <div class="model">${esc(p.model || "")}</div>
+      ${statusHTML(i, now) || '<div class="status"></div>'}
+      <div class="meta"><span>Hand <b>${S.handSizes[i] ?? "–"}</b></span><span>Wins <b>${S.scores[i] ?? 0}</b></span>
+        ${owned.length ? `<span>Owns <b>${owned.join(", ")}</b></span>` : ""}
+        ${S.table ? `<span>Tokens <b>${S.table.tokens[i]}</b>${(S.table.space_tokens || [])[i] ? ` (+${S.table.space_tokens[i]} in space)` : ""}</span>` : ""}</div>
+      ${S.table && S.table.spaces[i].length ? `<div class="model">Space: ${S.table.spaces[i].map(esc).join(" ")}</div>` : ""}
+      ${show ? `<div class="hand">${hand.map((c) => cardHTML(c, "sm")).join("")}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+function playOutcome(lp) {
+  const bits = [];
+  bits.push(lp.legal ? '<span class="badge good">legal</span>'
+    : `<span class="badge bad">illegal${lp.deciding_rule_index !== null && lp.deciding_rule_index !== undefined ? " (R" + Math.max(0, lp.deciding_rule_index + 1) + ")" : ""}</span>`);
+  if (lp.forced) bits.push('<span class="badge warn">engine chose card</span>');
+  if (!lp.resolved) { bits.push('<span class="badge warn">awaiting calls…</span>'); return bits.join(" "); }
+  if (lp.engineCall) bits.push('<span class="badge bad">engine called R0 (one card per play)</span>');
+  if (!lp.callers?.length && lp.engineCall) { /* the engine's call is shown above */ }
+  else if (!lp.callers?.length) bits.push(lp.missed ? '<span class="badge warn">MISSED: nobody called it</span>' : '<span class="badge muted">no calls</span>');
+  else {
+    const up = lp.upheldBy || [], rej = lp.rejected || [];
+    const rn = (s) => { const r = (lp.callRules || {})[s]; return r ? ` under R${r}` : ""; };
+    bits.push("called by " + lp.callers.map((s) => P(s) + (s === lp.seat ? " (self)" : "") + rn(s) + " "
+      + (up.includes(s) ? '<span class="badge bad">upheld</span>' : '<span class="badge good">false call</span>')).join(", "));
+    const drew = [];
+    if (up.length || lp.engineCall) drew.push(`${P(lp.seat)} draws 1`);
+    if (rej.length) drew.push(`${rej.map(P).join(", ")} draw${rej.length === 1 ? "s" : ""} 1 for a false call`);
+    bits.push(drew.join("; "));
+    if (lp.missed) bits.push('<span class="badge warn">MISSED: rule owner didn\'t call</span>');
+  }
+  if (lp.effects?.length) bits.push(`<span class="badge good">effects</span> ${esc(lp.effects.join("; "))}`);
+  if (lp.resolved && !lp.legal && lp.owners?.length) bits.push(`<span class="t">broke rules of ${lp.owners.map(P).join(", ")}</span>`);
+  return bits.join(" ");
+}
+
+function renderTable() {
+  $("deck").textContent = S.deck ?? "–";
+  const d = S.discard || [];
+  $("discard").innerHTML = d.length ? d.map((c, i) => {
+    const m = S.marks[c];
+    const html = cardHTML(c, (i === d.length - 1 ? "lg" : "") + (m ? ` pen pen-${m.mark}` : ""));
+    if (!m) return html;
+    const who = (ss) => ss.map((s) => P(s) + ((m.callRules || {})[s] ? ` (R${m.callRules[s]})` : "")).join(", ");
+    const why = [m.upheldBy?.length ? `penalty upheld, called by ${who(m.upheldBy)}: ${P(m.seat)} drew 1` : "",
+      m.rejected?.length ? `false call by ${who(m.rejected)}: they drew 1` : "",
+      m.missed ? "illegal, but its rule owner didn't call it" : ""].filter(Boolean).join("; ");
+    return html.replace(/title="[^"]*"/, `title="${esc(c)} (T${m.turn + 1}): ${esc(why)}"`);
+  }).join("") : '<span class="empty">empty</span>';
+  const lp = S.lastPlay;
+  const b = $("banner");
+  if (!lp) { b.className = "banner"; b.innerHTML = '<span class="empty">No plays yet.</span>'; return; }
+  b.className = "banner " + (!lp.resolved ? "" : lp.missed ? "warn" : lp.upheld ? "bad" : lp.callers?.length ? "good" : "");
+  const tb = S.table ? `<div style="font-size:12px;color:var(--muted);margin-bottom:4px">Order: ${S.table.direction === 1 ? "seat order" : "reversed"}${S.table.pot ? ` · pot on DISCARD: ${S.table.pot}` : ""}${S.table.declared ? ` · declared “${esc(S.table.declared[0])}” by ${P(S.table.declared[1])}` : ""}</div>` : "";
+  b.innerHTML = tb + `<b>${P(lp.seat)} ${esc(lp.player)}</b> played ${lp.move ? esc(lp.move_text) : cardHTML(lp.card, "inline")} on ${lp.top_before ? cardHTML(lp.top_before, "inline") : "empty DISCARD"} · ${playOutcome(lp)}
+    ${lp.deciding_rule ? `<div style="font-size:12px;color:var(--muted);margin-top:4px">Decided by R${Math.max(0, lp.deciding_rule_index + 1)}: ${esc(lp.deciding_rule)}</div>` : ""}`;
+}
+
+function renderRules() {
+  const lp = S.lastPlay;
+  $("ruleList").innerHTML = S.rules.length ? S.rules.map((r, k) => {
+    let cls = "";
+    if (lp && lp.deciding_rule_index === k) cls = lp.legal ? "allowed" : "forbade";
+    const how = r.added_after_game < 0 ? "dealer" : `won G${r.added_after_game + 1}`;
+    const seat = seatOf(r.owner);
+    return `<li class="${cls}"><span class="num">R${k + 1}</span>
+      <span class="badge ${r.rule.kind === "permission" ? "good" : r.rule.kind === "effect" ? "warn" : r.rule.kind === "win" ? "turn" : "bad"}">${r.rule.kind}</span>
+      <span style="flex:1">${esc(r.rule.description)}${r.rule.code ? `<details><summary>proposed as · code</summary>${r.rule.proposal ? `<div>“${esc(r.rule.proposal)}”</div>` : ""}<pre>${esc(r.rule.code)}</pre></details>` : ""}</span>
+      <span class="owner">${seat >= 0 ? P(seat) + " " : ""}${esc(r.owner)} · ${how}</span></li>`;
+  }).join("") : '<li class="empty">No rules yet.</li>';
+}
+
+function renderLog() {
+  const items = S.log.slice(-400).reverse();
+  $("logEntries").innerHTML = items.map((e) => {
+    if (e.sys) return `<div class="e sys">${esc(e.text)}</div>`;
+    return `<div class="e"><span class="t">G${e.game + 1} T${e.turn + 1}</span><b>${P(e.seat)}</b> ${esc(e.player)}
+      ${e.move ? esc(e.move_text) : cardHTML(e.card, "inline")} on ${e.top_before ? cardHTML(e.top_before, "inline") : "∅"} · ${playOutcome(e)}</div>`;
+  }).join("") || '<div class="empty">Nothing yet.</div>';
+}
+
+function renderReasoning(now) {
+  const names = S.players.map((p) => p.name);
+  $("tabs").innerHTML = names.map((n, i) => {
+    const st = S.status[i];
+    const live = st && (st.mode === "thinking" || st.mode === "judging");
+    return `<button data-tab="${esc(n)}" class="${n === selectedTab ? "active" : ""}">${P(i)} ${esc(n)}${live ? '<span class="live"></span>' : ""}</button>`;
+  }).join("");
+  if (!selectedTab) { $("notes").innerHTML = ""; $("rEntries").innerHTML = ""; return; }
+  const notes = S.notes[selectedTab];
+  $("notes").innerHTML = `<div class="notes"><h3>Current notes</h3>${notes ? esc(notes) : '<span class="empty">none yet</span>'}</div>`;
+  const seat = seatOf(selectedTab);
+  const st = S.status[seat];
+  let pending = "";
+  if (st && (st.mode === "thinking" || st.mode === "judging")) {
+    pending = `<div class="r-entry pending"><div class="r-head"><span class="badge">${st.mode === "thinking" ? "PLAY" : "JUDGE"}</span>
+      ${esc(st.what)} · ${st.mode} <span data-since="${st.since}">${fmtSecs(now - st.since)}</span></div></div>`;
+  }
+  const entries = (S.reasoning[selectedTab] || []).slice(-200).reverse();
+  $("rEntries").innerHTML = pending + (entries.map((e) => {
+    const m = e.meta || {};
+    const tok = (m.input_tokens || m.output_tokens) ? ` · ${fmtTok(m.input_tokens)} in / ${fmtTok(m.output_tokens)} out` : "";
+    const tries = (m.attempts || []).length > 1 ? ` · ${(m.attempts || []).length} attempts` : "";
+    const errors = (m.attempts || []).filter((a) => a.error).map((a) => a.error);
+    let head;
+    if (e.kind === "play") {
+      head = `<span class="badge">PLAY</span><span class="t">G${e.game + 1} T${e.turn + 1}</span>
+        ${cardHTML(e.card, "inline")} on ${e.top ? cardHTML(e.top, "inline") : "∅"}
+        ${e.legal ? '<span class="badge good">legal</span>' : '<span class="badge bad">illegal</span>'}
+        ${e.selfCall ? `<span class="badge bad">self-called${e.selfRule ? " R" + e.selfRule : ""}</span>` : ""}${e.forced ? '<span class="badge warn">engine chose</span>' : ""}`;
+    } else if (e.kind === "rule") {
+      head = `<span class="badge good">RULE</span><span class="t">${e.game === 0 ? "dealer, before G1" : "won G" + e.game}</span> “${esc(e.text)}”`;
+    } else {
+      // right iff it named a rule the play broke, or stayed silent when none of the judge's rules broke
+      const correct = e.mine === null || e.mine === undefined ? null
+        : e.penalty ? (e.broken ? e.broken.includes((e.rule ?? 0) - 1) : e.mine) : !e.mine;
+      head = `<span class="badge warn">JUDGE</span><span class="t">G${e.game + 1} T${e.turn + 1}</span> ${esc(e.target)} →
+        ${e.penalty ? `<span class="badge bad">PENALTY${e.rule ? " R" + e.rule : ""}</span>` : '<span class="badge muted">NONE</span>'}
+        ${correct === null ? "" : correct ? '<span class="badge good">correct</span>' : '<span class="badge bad">wrong</span>'}
+        ${e.forced ? '<span class="badge warn">no valid answer</span>' : ""}`;
+    }
+    return `<div class="r-entry"><div class="r-head">${head}<span class="t">${(e.elapsed ?? 0).toFixed(1)}s${tok}${tries}</span></div>
+      ${e.reasoning ? `<div class="r-body">${esc(e.reasoning)}</div>` : ""}
+      ${m.thinking ? `<details><summary>thinking summary</summary><pre>${esc(m.thinking)}</pre></details>` : ""}
+      ${e.notes ? `<details><summary>notes after this</summary><pre>${esc(e.notes)}</pre></details>` : ""}
+      ${errors.length ? `<details><summary>errors (${errors.length})</summary><pre>${esc(errors.join("\n"))}</pre></details>` : ""}
+    </div>`;
+  }).join("") || '<div class="empty">No entries yet.</div>');
+}
+
+function renderSummary() {
+  const el = $("summary");
+  if (!S.summary) { el.classList.remove("show"); return; }
+  el.classList.add("show");
+  const pct = (x) => x === null || x === undefined ? "–" : `${Math.round(x * 100)}%`;
+  const rows = S.summary.players.map((p) => `<tr><td>${esc(p.name)}</td><td>${p.wins}</td><td>${p.plays}</td>
+    <td>${pct(p.illegal_rate)}</td><td>${pct(p.avoidable_illegal_rate)}</td><td>${p.caught}/${p.illegal}</td>
+    <td>${pct(p.self_call_rate)}</td><td>${pct(p.judge_precision)}</td><td>${pct(p.judge_recall)}</td>
+    <td>${pct(p.judge_accuracy)}</td><td>${p.avg_decision_seconds ?? "–"}s</td><td>${fmtTok(p.input_tokens)}/${fmtTok(p.output_tokens)}</td></tr>`).join("");
+  $("summaryBody").innerHTML = `<div style="overflow-x:auto"><table><thead><tr><th>Player</th><th>Wins</th><th>Plays</th>
+    <th>Illegal</th><th>Avoidable illegal</th><th>Caught</th><th>Self-call</th><th>Call precision</th><th>Call recall</th>
+    <th>Call accuracy</th><th>Avg time</th><th>Tokens in/out</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function render() {
+  const now = Date.now() / 1000 + offset;
+  renderHeader(); renderPlayers(now); renderTable(); renderRules(); renderLog(); renderReasoning(now); renderSummary();
+}
+
+let caughtUp = false;
+function frame() {
+  if (dirty && caughtUp) { render(); dirty = false; }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// Live timers tick without a full re-render.
+setInterval(() => {
+  const now = Date.now() / 1000 + offset;
+  document.querySelectorAll("[data-since]").forEach((el) => { el.textContent = fmtSecs(Math.max(0, now - parseFloat(el.dataset.since))); });
+}, 100);
+
+// ---------------------------------------------------------------- wiring
+
+function connect() {
+  const es = new EventSource("/events");
+  es.onopen = () => $("conn").classList.add("on");
+  es.onerror = () => { $("conn").classList.remove("on"); caughtUp = false; };
+  es.onmessage = (m) => {
+    const ev = JSON.parse(m.data);
+    if (ev.type === "caught_up") { caughtUp = true; dirty = true; offset = ev.server_now - Date.now() / 1000; return; }
+    apply(ev);
+  };
+}
+connect();
+
+$("tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-tab]");
+  if (b) { selectedTab = b.dataset.tab; dirty = true; }
+});
+$("showHands").addEventListener("change", () => { dirty = true; });
+async function control(body) {
+  try { await fetch("/api/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+  catch (e) { console.warn(e); }
+}
+$("pause").addEventListener("click", () => control({ action: S.controls.paused ? "resume" : "pause" }));
+$("stop").addEventListener("click", () => { if (confirm("Stop the match after the current turn?")) control({ action: "stop" }); });
+$("delay").addEventListener("change", (e) => control({ delay: parseFloat(e.target.value) }));
+</script>
+</body>
+</html>
