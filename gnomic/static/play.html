@@ -107,6 +107,13 @@
                  padding: 5px 10px; cursor: pointer; }
   .calls label.on { border-color: var(--accent); background: var(--accent-soft); }
   .calls label.pen.on { border-color: var(--bad); background: var(--bad-soft); color: var(--bad); }
+  .sorter { float: right; display: inline-flex; gap: 4px; text-transform: none; letter-spacing: 0; }
+  .sorter button { padding: 1px 8px; font-size: 12px; }
+  .sorter button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .hyp { display: grid; grid-template-columns: 34px 1fr; gap: 6px 8px; align-items: center; }
+  .hyp b { text-align: right; }
+  .hyp input { width: 100%; }
+  .hyp input.changed { border-color: var(--accent); background: var(--accent-soft); }
   .send { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 
   .tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
@@ -132,6 +139,7 @@
 <main>
   <div>
     <div class="panel" id="action"></div>
+    <div class="panel" id="hyps" hidden></div>
     <div class="panel" id="table"></div>
   </div>
   <div>
@@ -153,6 +161,11 @@
         <p>Your reply is built from your choices in the reply format the engine expects. Tick <i>Edit the reply as
           text</i> to type it yourself. A reply the engine can't use gets an <b>INVALID</b> message; after the same
           number of retries an LLM gets, the engine plays a random card for you or counts your call as NONE.</p>
+        <p><b>Your hypotheses</b>: for every rule you don't own, write your current best statement of exactly what it
+          says, as a rule of its own (e.g. <i>No red card on a red card</i>, <i>A Queen may be played on anything</i>).
+          Changes go with your next reply, as an LLM's do. The engine turns each hypothesis into code and scores how
+          soon and how closely it matches the real rule. You aren't scored on your own rules, and you never see scores
+          during the match. Leave a box empty for "no idea yet".</p>
         <p><b>Notes</b> are your private notes, as an LLM keeps them. They are sent with every reply. Nobody at the
           table sees them; spectators of the match do.</p>
         <p>Keys: <span class="mono">Ctrl/⌘+Enter</span> sends.</p>
@@ -179,7 +192,7 @@ let S, F;
 function reset() {
   S = { intro: null, log: [], req: null, view: null, invalid: null, sending: false, sendError: null,
         lastDone: null, matchEnd: null, message: null, notes: null, caughtUp: false,
-        current: null, currentSince: null };
+        current: null, currentSince: null, hyps: [], hypDraft: {} };
   resetForm();
 }
 function resetForm() {
@@ -196,6 +209,7 @@ function handle(ev) {
       $("briefing").textContent = ev.system_prompt; $("briefing").classList.remove("muted");
       break;
     case "update":
+      if (ev.hypotheses) S.hyps = ev.hypotheses;
       for (const line of ev.events) S.log.push({ cls: "", text: line });
       for (const line of ev.private) S.log.push({ cls: "private", text: "PRIVATE " + line });
       if (!S.req) S.view = ev.view;
@@ -205,7 +219,8 @@ function handle(ev) {
     case "request": {
       for (const line of ev.events) S.log.push({ cls: "", text: line });
       for (const line of ev.private) S.log.push({ cls: "private", text: "PRIVATE " + line });
-      S.req = ev; S.view = ev.view; S.current = null; S.invalid = null; S.lastDone = null; S.sendError = null; S.message = ev.message;
+      S.req = ev; S.view = ev.view; S.current = null;
+      if (ev.hypotheses) S.hyps = ev.hypotheses; S.invalid = null; S.lastDone = null; S.sendError = null; S.message = ev.message;
       if (ev.notes != null) S.notes = ev.notes;
       resetForm();
       break;
@@ -220,6 +235,10 @@ function handle(ev) {
         S.log.push({ cls: "mine", text: ev.accepted ? `${what}: ${replyLines(ev.reply || "")}`
                                                     : `${what}: no usable reply, so ${ev.fallback}` });
         S.lastDone = ev; S.req = null; S.invalid = null;
+        if (ev.hypotheses) {
+          S.hyps = ev.hypotheses;
+          for (const [n, text] of S.hyps) if (S.hypDraft[n] !== undefined && norm(S.hypDraft[n]) === norm(text)) delete S.hypDraft[n];
+        }
         if (ev.notes != null) S.notes = ev.notes;
       }
       break;
@@ -238,11 +257,38 @@ function replyLines(text) {
   return (i < 0 ? lines.slice(-1) : lines.slice(i)).join(" / ");
 }
 
+// ---- sorting the hand (display only) ---------------------------------------------------
+const RANK = { A: 1, J: 11, Q: 12, K: 13 };
+const SUIT_ORDER = { S: 0, H: 1, C: 2, D: 3 };  // alternate colours
+const rankOf = (c) => RANK[c.slice(0, -1)] || +c.slice(0, -1);
+let handSort = localStorage.getItem("gnomic.handSort") || "suit";
+function sortedHand(hand) {
+  const h = hand.slice();
+  const bySuit = (a, b) => SUIT_ORDER[a.slice(-1)] - SUIT_ORDER[b.slice(-1)];
+  if (handSort === "asc") h.sort((a, b) => rankOf(a) - rankOf(b) || bySuit(a, b));
+  else if (handSort === "desc") h.sort((a, b) => rankOf(b) - rankOf(a) || bySuit(a, b));
+  else h.sort((a, b) => bySuit(a, b) || rankOf(a) - rankOf(b));
+  return h;
+}
+function sorterHTML() {
+  return `<span class="sorter">sort: ${[["asc", "A → K"], ["desc", "K → A"], ["suit", "suit"]].map(([k, label]) =>
+    `<button data-sort="${k}" class="${handSort === k ? "on" : ""}">${label}</button>`).join("")}</span>`;
+}
+
+// ---- hypotheses -----------------------------------------------------------------
+const norm = (t) => String(t || "").split(/\s+/).join(" ").trim().replace(/[. ]+$/, "");
+function hypChanges() {
+  return S.hyps.filter(([n, text]) => S.hypDraft[n] !== undefined && norm(S.hypDraft[n]) !== norm(text))
+               .map(([n]) => [n, S.hypDraft[n].split(/\s+/).join(" ").trim()]);
+}
+
 // ---- composing a reply -------------------------------------------------------
 function compose() {
   const r = S.req, v = S.view, L = [];
   const notes = ($("notes")?.value ?? S.notes ?? "").trim();
   if (notes) L.push("NOTES:", notes);
+  const changed = hypChanges();
+  if (changed.length) L.push("HYPOTHESES:", ...changed.map(([n, t]) => `R${n}: ${t || "?"}`));
   if (r.kind === "play") {
     L.push("PLAY: " + (F.sel.join(" ") || "<choose a card>"));
     if (v.mechanics) {
@@ -290,18 +336,23 @@ function render() {
     ? `G${v.game + 1}/${v.num_games} · T${v.turn + 1} · round ${Math.min(v.round, v.max_rounds)}/${v.max_rounds} · rules in effect: ${v.num_rules}`
     : `between games · rules in effect: ${v.num_rules}`;
   document.title = (S.req ? "● Your move — " : "") + "Gnomic Mau" + (me ? ` (${me})` : "");
+  // Keep focus and typing in text fields across re-renders.
+  const active = document.activeElement?.id, caret = document.activeElement?.selectionStart;
   renderAction();
+  renderHyps();
   renderTable();
   renderLog();
   $("message").textContent = S.message || "No message yet.";
   $("message").classList.toggle("muted", !S.message);
+  if (active && $(active) && document.activeElement !== $(active)) {
+    $(active).focus();
+    if (caret != null && $(active).setSelectionRange) try { $(active).setSelectionRange(caret, caret); } catch (e) {}
+  }
 }
 
 function renderAction() {
   const box = $("action"), r = S.req, v = S.view;
   box.className = "panel" + (r ? " open " + r.kind : "");
-  // Keep focus and typing in text fields across re-renders.
-  const active = document.activeElement?.id, caret = document.activeElement?.selectionStart;
   const notesVal = $("notes") ? $("notes").value : (S.notes || "");
   if (!r) {
     let html;
@@ -320,7 +371,7 @@ function renderAction() {
     if (S.lastDone && !S.lastDone.accepted)
       html += `<div class="invalid">Your last reply couldn't be used (${esc(S.lastDone.error || "")}), so ${esc(S.lastDone.fallback)}.</div>`;
     if (S.view && S.view.table && S.view.hand)
-      html += `<div class="field"><label class="t">Your hand</label><div class="hand">${S.view.hand.map((c) => cardHTML(c)).join("")}</div></div>`;
+      html += `<div class="field"><label class="t">Your hand ${sorterHTML()}</label><div class="hand">${sortedHand(S.view.hand).map((c) => cardHTML(c)).join("")}</div></div>`;
     box.innerHTML = html;
     return;
   }
@@ -336,8 +387,8 @@ function renderAction() {
 
   if (r.kind === "play" || r.kind === "judge") {
     const pick = r.kind === "play" && !F.editRaw;
-    html += `<div class="field"><label class="t">Your hand${pick ? (v.mechanics ? " — click cards to play, in order (the last ends on top)" : " — click the card to play") : ""}</label>
-      <div class="hand ${pick ? "pick" : ""}" id="hand">${v.hand.map((c) => {
+    html += `<div class="field"><label class="t">Your hand${pick ? (v.mechanics ? " — click cards to play, in order (the last ends on top)" : " — click the card to play") : ""} ${sorterHTML()}</label>
+      <div class="hand ${pick ? "pick" : ""}" id="hand">${sortedHand(v.hand).map((c) => {
         const k = F.sel.indexOf(c);
         return cardHTML(c, "lg" + (k >= 0 ? " sel" : ""), 0, k >= 0 && v.mechanics ? `<span class="ord">${k + 1}</span>` : "");
       }).join("")}</div></div>`;
@@ -366,17 +417,23 @@ function renderAction() {
       <textarea id="rule" rows="3" maxlength="600">${esc(F.rule)}</textarea></div>`;
   }
   html += `<div class="field"><label class="t">Notes (private; sent with every reply)</label>
-    <textarea id="notes" rows="5" placeholder="Your hypotheses about the hidden rules, and the evidence for and against each.">${esc(notesVal)}</textarea></div>`;
+    <textarea id="notes" rows="5" placeholder="Your private notes: evidence for and against your hypotheses, what to test next.">${esc(notesVal)}</textarea></div>`;
   html += `<div class="field"><label class="t"><input type="checkbox" id="editRaw" ${F.editRaw ? "checked" : ""}> Edit the reply as text</label>
     ${F.editRaw ? `<textarea id="raw" rows="8" class="mono">${esc(F.raw)}</textarea>` : `<pre class="request" id="preview">${esc(compose())}</pre>`}</div>`;
   html += `<div class="send"><button class="primary" id="sendBtn" ${ready() ? "" : "disabled"}>${S.sending ? "Sending…" : "Send reply"}</button>
     <span class="muted">Ctrl/⌘+Enter</span>${S.sendError ? `<span style="color:var(--bad)">${esc(S.sendError)}</span>` : ""}</div>`;
   box.innerHTML = html;
+}
 
-  if (active && $(active)) {
-    $(active).focus();
-    if (caret != null && $(active).setSelectionRange) try { $(active).setSelectionRange(caret, caret); } catch (e) {}
-  }
+function renderHyps() {
+  const box = $("hyps");
+  box.hidden = !S.hyps.length;
+  if (!S.hyps.length) return;
+  const changed = new Set(hypChanges().map(([n]) => n));
+  box.innerHTML = `<h2>Your hypotheses <span style="text-transform:none;letter-spacing:0">(what you think each rule you don't own says; private)</span></h2>
+    <div class="hyp">${S.hyps.map(([n, text]) => `<b>R${n}</b><input id="hyp-${n}" maxlength="400" placeholder="? (no idea yet)"
+      class="${changed.has(n) ? "changed" : ""}" value="${esc(S.hypDraft[n] !== undefined ? S.hypDraft[n] : text)}">`).join("")}</div>
+    <div class="muted" style="margin-top:6px">${changed.size ? `${changed.size} change${changed.size > 1 ? "s" : ""} will be sent with your next reply.` : "Edit a box to change a hypothesis; it is sent with your next reply."}</div>`;
 }
 
 function renderTable() {
@@ -429,6 +486,13 @@ document.addEventListener("click", (e) => {
     for (const t of ["log", "message", "briefing", "help"]) $("tab-" + t).hidden = t !== tab.dataset.tab;
     return;
   }
+  const sortBtn = e.target.closest(".sorter button");
+  if (sortBtn) {
+    handSort = sortBtn.dataset.sort;
+    localStorage.setItem("gnomic.handSort", handSort);
+    render();
+    return;
+  }
   const card = e.target.closest("#hand.pick .card");
   if (card && S.req && S.req.kind === "play") {
     const c = card.dataset.card, k = F.sel.indexOf(c);
@@ -456,6 +520,11 @@ document.addEventListener("input", (e) => {
   else if (t.id === "rule") F.rule = t.value;
   else if (t.id === "raw") F.raw = t.value;
   else if (t.id === "notes") S.notes = t.value;
+  else if (t.id.startsWith("hyp-")) {
+    S.hypDraft[+t.id.slice(4)] = t.value;
+    const confirmed = (S.hyps.find(([n]) => n === +t.id.slice(4)) || [0, ""])[1];
+    t.classList.toggle("changed", norm(t.value) !== norm(confirmed));
+  }
   else return;
   // Update only the preview and the button, so typing isn't interrupted.
   if ($("preview")) $("preview").textContent = compose();

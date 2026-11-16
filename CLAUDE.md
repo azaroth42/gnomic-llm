@@ -273,6 +273,10 @@ Clarifications and decisions (all made by the user unless marked *default*):
     omitted by players who own no rules);
   - `JUDGE: P2 plays 5D on JH` → reply ends `NOTES: …` / `CALL: PENALTY R<n>|NONE`.
   So players are told about every play (they judge each one) and when it's their turn.
+- **Hypotheses** (user decision, see "Understanding the rules" below): any reply may carry a
+  `HYPOTHESES:` block between NOTES and the final PLAY/CALL/RULE line, one `R<n>: <text>` line per
+  rule whose hypothesis changed (`R<n>: ?` = none). STATE shows the current ones as
+  `YOUR HYPOTHESES: R1: … | R3: ?`, listing only rules the player doesn't own.
 - **Reasoning log:** `NOTES` is each player's private, self-maintained hypothesis log. It's kept
   if omitted, and re-sent after a resync. The UI shows each exchange's reasoning, the provider's
   thinking summary where available, and the notes. Other players never see any of it.
@@ -336,6 +340,12 @@ Clarifications and decisions (all made by the user unless marked *default*):
 - **Replies:** the page builds the reply text from clicks (cards in order for multi-card moves,
   ANGLE / SPEND / TARGET / DECLARE / GIVE from game 3, NONE / PENALTY R<n>, RULE text), with a
   live preview. "Edit the reply as text" lets the human type the reply as an LLM would.
+- **Hypotheses** (user decision: humans state them too): a "Your hypotheses" panel has a box
+  per rule the player doesn't own. Edits are kept as drafts and the changed ones go into the
+  next reply's HYPOTHESES block, so they're parsed and graded exactly like an LLM's. Players never
+  see scores during the match. The terminal `human` player is asked for changed hypotheses too.
+- **Hand sorting** (user decision): A → K, K → A, or by suit (♠ ♥ ♣ ♦, then value), remembered in
+  the browser. Display only; a multi-card play is still in click order.
 - **Transport:** each `web` player has a private outbox (`EventBus`, no log file) and a secret
   token. `GET /play/<token>` (page), `/play/<token>/events` (SSE replay + live), and
   `POST /play/<token>/reply {id, text}` (409 if that request is no longer open).
@@ -347,13 +357,57 @@ Clarifications and decisions (all made by the user unless marked *default*):
   `StopMatch`. `Game` now re-raises `StopMatch` from `choose`/`call` instead of treating it as a
   crashing player.
 
+## Understanding the rules (`understanding.py`; on in the CLI, `--no-grade` turns it off)
+
+- **User decisions:** the engine scores not just play but how quickly, if at all, each player
+  works out each rule. Players state hypotheses with every reply (above). They're graded by
+  **code and compare**, **live** during play. **Nobody is scored on their own rules.**
+- **Grading** (`HypothesisGrader`): the coder (`--coder`) turns each distinct hypothesis into code,
+  the same way it implements a proposed rule, seeing only the hypothesis text. The engine compares the coded
+  hypothesis with the real rule over a fixed sample per rule (`SAMPLES` = 300 situations ×13
+  candidate cards, seeded per rule, so every player gets the same test). It compares verdicts for
+  restrictions and permissions, effects caused for effects, and met/not met over `win_contexts`
+  for win rules. Score = agreement over the situations where at least one of the two does
+  something (never applying scores 0; identical = 1). "?" or uncodable = 0. A different kind of
+  rule (except restriction vs permission, compared by verdicts) = 0. The coder's allowances
+  (mechanics, wins) are those of the real rule.
+- Runs in `--grade-workers` (default 4) background threads, each with its own coder session, so
+  play isn't slowed. At match end the engine waits for grading to finish (`grading_wait` event),
+  or drops the queue if the match was stopped.
+- **Metrics** (per player × rule not owned, in `summary["understanding"]`): `final_score`,
+  `mean_score` (the score averaged over every turn the rule was in effect: rewards being right
+  early), `understood` / `turns_to_understand` (match turns from the rule's start until the
+  hypothesis reaches `UNDERSTOOD` = 0.95 and stays there to the end), and the number of hypotheses.
+  Per player: `rules_understood` / `rules_to_learn`, `understanding_score` (mean of mean_score),
+  `mean_turns_to_understand`. These are also merged into the per-player summary rows. A
+  hypothesis counts from the match turn it was stated (judges' replies about turn t count from t).
+- Events: `hypothesis` (player, rule, text, match_turn), `hypothesis_graded` (rule, text, score,
+  coded_kind, description, error, players holding it).
+- Baselines state no hypotheses and aren't scored.
+
+## Coder cache (`coder.CoderCache`, `CachedRuleCoder`)
+
+- **User decision:** the coding agent is never asked to code the same text twice. Every coder
+  request goes through one cache: proposed rules, players' hypotheses, any rule number, any
+  player. The key is (coder model, hash of the coder prompt, mechanics/wins allowances, text with
+  whitespace collapsed and a trailing full stop dropped; case kept). It stores code and also
+  CANNOT / no-working-code outcomes, but not API failures. Concurrent requests for the same text
+  share one call. Cached code is smoke-tested again on the new samples.
+- **Persisted in the repository** (user decision): the CLI's default `--coder-cache` is
+  `cache/coder-cache.jsonl` (append-only JSONL, committed), so results carry across matches and
+  checkouts. `--coder-cache none` keeps it to the match. `MatchConfig.coder_cache` defaults to None,
+  so tests never write to the committed file. Changing the coder prompt changes the key (old
+  entries just go unused).
+- The summary reports `coder_cache` (texts coded, cache hits); `rule_coded` / `rule_rejected`
+  events carry `coder.cached`.
+
 ## Metrics (`match.summarize`, also in `<log>.summary.json`)
 
 Per player: wins; `illegal_rate`; `avoidable_illegal_rate` (illegal while holding a legal card:
 the key play metric); caught/uncaught illegal plays; `self_call_rate`; judging precision,
 recall and accuracy on other players' plays (a call is correct iff upheld; a miss is a play that
 broke the judge's rule with no call); penalty and false-call draws; tokens; average
-decision time; illegal rate per game (learning curve).
+decision time; illegal rate per game (learning curve); rule understanding (above).
 
 ## Spectator web UI (`gnomic/server.py`, `gnomic/static/index.html`)
 
@@ -366,7 +420,9 @@ decision time; illegal rate per game (learning curve).
   marked by what its play caused: red `!` = penalty upheld, amber `✗` = false call, the callers
   drew; dashed `?` = illegal but uncalled; hover for details), the last play's outcome (legal/illegal, which rule decided it, callers,
   upheld/rejected, or MISSED when nobody called a violation), the rules in effect with owners,
-  the play log, a per-player reasoning-log tab, and the match summary.
+  the play log, a per-player reasoning-log tab, an Understanding table (players × rules: the
+  current hypothesis's score, green from 95%, "own" for their own rules, hover for the hypothesis
+  and its coded form), and the match summary (with understood / understanding / turns to understand).
 - The UI is for humans only; it shows everything, hidden rules included.
 
 ## Code map
@@ -375,7 +431,8 @@ decision time; illegal rate per game (learning curve).
 gnomic/cards.py       Card, parsing ("10H", "Q♠", "queen of spades"), deck
 gnomic/rules.py       Verdict, PlayContext, Rule templates, RuleStack precedence, generate_rule
 gnomic/judges.py      RuleAuthor protocol, EngineRuleAuthor (library rules), ProposedRuleAuthor (--propose-rules)
-gnomic/coder.py       Coding agent: plain-language rule -> `def applies(ctx)`
+gnomic/coder.py       Coding agent: plain-language rule -> `def applies(ctx)`; CoderCache
+gnomic/understanding.py  Hypothesis grading (code and compare) and understanding metrics
 gnomic/sandbox.py     Restricted interpreter for coded rules, CodeRule
 gnomic/mechanics.py   Game-3+ table: Move (options), TableState, Placed, Effects (fx API), R0
 gnomic/game.py        Game loop (play → calls → resolution), PublicLog, PlayerView, Controls
@@ -386,13 +443,17 @@ gnomic/players/       base (Choice, Call, Player), llm, baselines, human (termin
 gnomic/events.py      EventBus → JSONL log + live subscribers
 gnomic/server.py      HTTP/SSE server: spectator UI (static/index.html) and player pages (static/play.html)
 gnomic/cli.py         `gnomic play | replay | rules`
-tests/                engine, protocol (fake LLM sessions), server, propose (sandbox, coder, fakes), mechanics, web
+tests/                engine, protocol (fake LLM sessions), server, propose (sandbox, coder, fakes), mechanics, web,
+                      understanding (hypotheses, grading, cache)
+cache/coder-cache.jsonl  committed coder results (see Coder cache)
 ```
 
 ## Cost and known limits
 
 - Every play costs one LLM call per LLM player (the player, plus every judge). A 4-LLM game of
   ~80 turns is ~320 calls. Calls within a judging round run in parallel.
+- Grading adds one coder call per distinct hypothesis text never seen before (the prompt asks
+  players to keep their wording unless they change their mind, and the cache does the rest).
 - Hosted providers (Anthropic, OpenAI, Gemini, LiteLLM) have not been exercised live (no API
   keys in the dev environment); the protocol is tested with fake sessions. MTPLX has been run live.
 - Ideas not built yet: a cheaper effort level for JUDGE requests;

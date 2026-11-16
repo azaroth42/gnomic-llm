@@ -14,7 +14,7 @@ import time
 from typing import Callable
 
 from ..game import PendingPlay, PlayerView
-from ..protocol import (ParsedReply, judge_request, parse_call, parse_play, parse_rule, render_call_retry,
+from ..protocol import (ParsedReply, judge_request, parse_call, parse_hypotheses, parse_play, parse_rule, render_call_retry,
                         render_message, render_play_retry, render_rule_state, rule_request, system_prompt,
                         turn_request)
 from ..providers import ChatSession
@@ -24,6 +24,7 @@ from .base import Call, Choice, Player, Proposal
 class LLMPlayer(Player):
     kind = "llm"
     makes_rules = True
+    states_hypotheses = True
 
     def __init__(self, name: str, session: ChatSession, *, max_retries: int = 2,
                  history_messages: int = 120, context_fill: float = 0.6):
@@ -62,7 +63,8 @@ class LLMPlayer(Player):
         self.cursor = len(view.log)
         self.private_cursor = len(view.private)
         self.session_msgs += 1
-        return render_message(view, events, request, self.notes, resync=resync, state=state, private=private)
+        return render_message(view, events, request, self.notes, resync=resync, state=state, private=private,
+                              hypotheses=self.hypotheses)
 
     def _exchange(self, view: PlayerView, request: str, kind: str,
                   parse: Callable[[str], ParsedReply], retry: Callable[[str], str],
@@ -92,6 +94,9 @@ class LLMPlayer(Player):
                              "served_by": comp.served_by, "stop_reason": comp.stop_reason})
             if parsed.notes:
                 self.notes = parsed.notes
+            changed = self.record_hypotheses(view, parse_hypotheses(comp.text))
+            if changed:
+                attempts[-1]["hypotheses"] = changed
             if parsed.error is None:
                 break
             message = retry(parsed.error)
@@ -103,7 +108,7 @@ class LLMPlayer(Player):
             "reasoning": parsed.reasoning if parsed else "", "notes": self.notes,
             "thinking": meta["thinking"], "card": str(ok.card) if ok and ok.card else None,
             "penalty": ok.penalty if ok else None, "rule": ok.rule if ok else None,
-            "rule_text": ok.rule_text if ok else None,
+            "rule_text": ok.rule_text if ok else None, "hypotheses": dict(self.hypotheses),
             "attempts": attempts, **totals,
         })
         return ok, meta

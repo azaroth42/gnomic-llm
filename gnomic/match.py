@@ -19,6 +19,7 @@ from .judges import EngineRuleAuthor, ProposedRuleAuthor, RuleAuthor
 from .players.base import Player
 from .players.factory import make_player, make_session
 from .rules import RuleStack
+from .understanding import HypothesisGrader
 
 
 @dataclass
@@ -32,7 +33,10 @@ class MatchConfig:
     dealer: int | None = None           # seat; random if None
     names: list[str] = field(default_factory=list)  # optional display names, one per player
     propose_rules: bool = False         # the dealer and winners make up their rules; a coding model implements them
-    coder: str = "anthropic:claude-opus-5-5"  # coding-model spec (with propose_rules)
+    coder: str = "anthropic:claude-opus-5-5"  # coding-model spec (proposed rules and grading hypotheses)
+    grade_hypotheses: bool = False      # grade players' rule hypotheses live with the coder (the CLI turns this on)
+    grade_workers: int = 4              # parallel coder sessions for grading
+    coder_cache: str | None = None      # JSONL file that keeps coder results across matches (None: this match only)
     rule_attempts: int = 3              # proposals per rule before falling back to a library rule
     mechanics_from: int = 3             # 1-based game from which rules may add table mechanics; 0 = never
     wins_from: int = 6                  # 1-based game from which rules may be win conditions; 0 = never
@@ -40,7 +44,8 @@ class MatchConfig:
 
 class Match:
     def __init__(self, config: MatchConfig, emit: Callable[..., object] = null_emit,
-                 controls: Controls | None = None, author: RuleAuthor | None = None):
+                 controls: Controls | None = None, author: RuleAuthor | None = None,
+                 coder_factory: Callable[[], object] | None = None):
         self.config = config
         self.emit = emit
         self.controls = controls or Controls(config.delay)
@@ -54,9 +59,23 @@ class Match:
         self.results: list[GameResult] = []
         self.private: list[list[str]] = [[] for _ in self.players]  # trade / peek notices, per seat
         self.dealer = config.dealer if config.dealer is not None else self.rng.randrange(len(self.players))
+        # Every coding request (proposed rules, hypotheses) goes through one cache, so the coder is
+        # never asked to code the same text twice.
+        from .coder import CachedRuleCoder, CoderCache, RuleCoder
+        self.coder_cache = CoderCache(config.coder_cache)
+        self.coder_factory = coder_factory or (lambda: CachedRuleCoder(RuleCoder(make_session(config.coder)),
+                                                                       self.coder_cache))
+        self.grader: HypothesisGrader | None = None
+        if config.grade_hypotheses and any(p.states_hypotheses for p in self.players):
+            self.grader = HypothesisGrader(self.coder_factory, self.emit, workers=config.grade_workers,
+                                           seed=config.seed or 0, mechanics_from=self._mechanics_from(),
+                                           wins_from=self._wins_from())
+        for p in self.players:
+            if p.states_hypotheses:
+                p.hypothesis_sink = self._hypotheses
+        self._game: Game | None = None
         if config.propose_rules and author is None:
-            from .coder import RuleCoder
-            self.author = ProposedRuleAuthor(RuleCoder(make_session(config.coder)), fallback=self.author,
+            self.author = ProposedRuleAuthor(self.coder_factory(), fallback=self.author,
                                              players=self.players, view=self._rule_view, emit=self.emit,
                                              rng=random.Random(self.rng.random()), attempts=config.rule_attempts,
                                              mechanics_from=config.mechanics_from, wins_from=config.wins_from)
@@ -102,6 +121,20 @@ class Match:
             raise ValueError("need at least 2 players")
         return players
 
+    def match_turn(self, game: int, turn: int) -> int:
+        """Turns played in the match before turn `turn` of game `game` (both 0-based)."""
+        return sum(r.turns for r in self.results[:game]) + turn
+
+    def _hypotheses(self, player: Player, view: PlayerView, changes: dict[int, str]) -> None:
+        seat = self.players.index(player)
+        mt = self.match_turn(view.game, view.turn)
+        if self.grader is not None:
+            self.grader.record(player.name, seat, changes, mt, view.game, view.turn)
+        else:
+            for rule, text in sorted(changes.items()):
+                self.emit("hypothesis", player=player.name, seat=seat, rule=rule, text=text, match_turn=mt,
+                          game=view.game, turn=view.turn, score=None, graded=False)
+
     def _add_rule(self, owner: int, after_game: int) -> None:
         try:
             entry = self.author.author_rule(self.stack, self.players[owner].name, after_game)
@@ -115,6 +148,8 @@ class Match:
         self.emit("rule_added", number=number, owner=entry.owner, owner_seat=owner,
                   after_game=after_game, rule=entry.rule.to_json(),
                   stack=[e.to_json() for e in self.stack.entries])
+        if self.grader is not None:
+            self.grader.add_rule(number, entry, self.match_turn(after_game + 1, 0))
 
     def run(self) -> dict:
         cfg = self.config
@@ -134,7 +169,9 @@ class Match:
                             mechanics=self.mechanics_in(g), mechanics_from=self._mechanics_from(),
                             wins_from=self._wins_from(),
                             private=self.private)
+                self._game = game
                 result = game.play()
+                self._game = None
                 self.results.append(result)
                 if result.winner is not None:
                     self.scores[result.winner] += 1
@@ -145,6 +182,18 @@ class Match:
             stopped = True
         summary = summarize(self.players, self.results, self.scores)
         summary["stopped"] = stopped
+        if self.grader is not None:
+            self.emit("grading_wait", stopped=stopped)
+            self.grader.wait(cancel=stopped)
+            total = self.match_turn(len(self.results), self._game.turn if self._game is not None else 0)
+            und = self.grader.summary(self.players, total)
+            summary["understanding"] = und
+            for row in summary["players"]:
+                u = und["players"].get(row["name"])
+                if u:
+                    row.update({k: u[k] for k in ("understanding_score", "rules_understood", "rules_to_learn",
+                                                  "mean_turns_to_understand")})
+        summary["coder_cache"] = self.coder_cache.stats()
         for p in self.players:
             p.on_match_end(tuple(self.log.events), list(self.scores), stopped)
         summary["rules"] = [e.to_json() for e in self.stack.entries]

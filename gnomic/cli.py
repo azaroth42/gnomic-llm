@@ -20,6 +20,7 @@ from pathlib import Path
 from .events import EventBus
 from .game import Controls
 from .match import Match, MatchConfig
+from .coder import default_cache_path
 from .rules import TEMPLATES
 
 
@@ -33,6 +34,17 @@ def _print_summary(summary: dict) -> None:
         if r["rule"].get("proposal"):
             print(f"      proposed as: {r['rule']['proposal']}")
     pct = lambda x: "  -  " if x is None else f"{x * 100:4.0f}%"
+    und = summary.get("understanding")
+    if und:
+        print(f"\nUnderstanding (hypotheses coded and compared with each rule; understood at >= {und['threshold']:.0%}):")
+        print("  player                 rules understood  score  final  turns-to-understand")
+        for name, u in und["players"].items():
+            mt = u["mean_turns_to_understand"]
+            print(f"  {name[:22]:22} {u['rules_to_learn']:5} {u['rules_understood']:10}  {pct(u['understanding_score'])}  "
+                  f"{pct(u['final_score'])}  {'-' if mt is None else mt}")
+    cc = summary.get("coder_cache")
+    if cc and (cc["coder_calls"] or cc["cache_hits"]):
+        print(f"\nCoder: {cc['coder_calls']} texts coded, {cc['cache_hits']} answered from the cache")
     print("\n  player                 wins  plays illegal avoidable caught self-call  prec recall   acc")
     for p in summary["players"]:
         print(f"  {p['name'][:22]:22} {p['wins']:4} {p['plays']:6} {pct(p['illegal_rate'])}   {pct(p['avoidable_illegal_rate'])}"
@@ -51,7 +63,9 @@ def cmd_play(args: argparse.Namespace) -> int:
     config = MatchConfig(players=args.player, num_games=args.games, seed=args.seed, hand_size=args.hand_size,
                          max_rounds=args.max_rounds, delay=delay, dealer=args.dealer,
                          propose_rules=args.propose_rules, coder=args.coder, rule_attempts=args.rule_attempts,
-                         mechanics_from=args.mechanics_from, wins_from=args.wins_from)
+                         mechanics_from=args.mechanics_from, wins_from=args.wins_from,
+                         grade_hypotheses=not args.no_grade, grade_workers=args.grade_workers,
+                         coder_cache=None if args.coder_cache.lower() == "none" else args.coder_cache)
     try:
         match = Match(config, emit=bus, controls=controls)
     except (ValueError, RuntimeError) as e:
@@ -171,7 +185,15 @@ def main(argv: list[str] | None = None) -> int:
                    help="the dealer (and each game's winner) makes up their rule in plain language; a coding "
                         "model implements it and the engine checks it. Players that can't (baselines) get library rules")
     p.add_argument("--coder", default="anthropic:claude-opus-5-5", metavar="SPEC",
-                   help="coding model for --propose-rules, as a provider spec (default: %(default)s)")
+                   help="coding model, as a provider spec: implements --propose-rules rules and grades players' "
+                        "rule hypotheses (default: %(default)s)")
+    p.add_argument("--no-grade", action="store_true",
+                   help="don't grade players' rule hypotheses (grading uses the --coder model)")
+    p.add_argument("--grade-workers", type=int, default=4, metavar="N",
+                   help="parallel coder sessions for grading hypotheses (default: %(default)s)")
+    p.add_argument("--coder-cache", default=str(default_cache_path()), metavar="PATH",
+                   help="JSONL cache of coder results, so no text is coded twice; committed with the repo "
+                        "(default: %(default)s); 'none' keeps the cache for this match only")
     p.add_argument("--rule-attempts", type=int, default=3, metavar="N",
                    help="with --propose-rules, how many rules to ask for before using a library rule (default: %(default)s)")
     p.add_argument("--mechanics-from", type=int, default=3, metavar="N",

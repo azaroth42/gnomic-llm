@@ -12,12 +12,23 @@ non-bool, too slow), the engine sends the error back and the coder tries again,
 up to `max_fixes` times. If it still fails, or the coder answers CANNOT, the rule
 can't be implemented and the engine asks the rule's author for a different rule
 (see judges.ProposedRuleAuthor).
+
+Caching (user decision): the coder is never asked to code the same text twice. `CoderCache`
+keys each result by (coder model, coder prompt, mechanics/wins allowances, normalized text),
+whether the text is a proposed rule or a player's hypothesis, and for any rule number. It stores
+code and also CANNOT / no-working-code outcomes (but not API failures, which are retried). Two
+threads asking for the same text at once share one coder call. With a path, the cache persists
+across matches as JSONL.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .providers import ChatSession
 from .mechanics import ANGLES, MAX_COUNT
@@ -163,6 +174,13 @@ def coder_prompt(mechanics: bool = False, wins: bool = False) -> str:
 
 class CoderFailure(Exception):
     """The coding agent couldn't produce a working implementation of the rule."""
+    meta: dict = {}
+
+
+def _failure(reason: str, meta: dict) -> CoderFailure:
+    e = CoderFailure(reason)
+    e.meta = meta
+    return e
 
 
 @dataclass
@@ -232,11 +250,11 @@ class RuleCoder:
             meta["attempts"].append(attempt)
             if reply.cannot:
                 attempt["error"] = f"CANNOT: {reply.cannot}"
-                raise CoderFailure(reply.cannot)
+                raise _failure(reply.cannot, meta)
             if reply.error is None and reply.kind == "win" and not wins:
-                raise CoderFailure("win conditions aren't allowed yet")
+                raise _failure("win conditions aren't allowed yet", meta)
             if reply.error is None and reply.kind == "effect" and not mechanics:
-                raise CoderFailure("effects (table mechanics) aren't allowed yet")
+                raise _failure("effects (table mechanics) aren't allowed yet", meta)
             if reply.error is None:
                 try:
                     smoke_test(compile_rule(reply.code, reply.kind, mechanics), samples, kind=reply.kind)
@@ -247,4 +265,123 @@ class RuleCoder:
             attempt["error"] = last_error = reply.error
             message = (f"ERROR: {reply.error}\nFix it and reply again in the same format "
                        "(KIND, DESCRIPTION, ```python code block), or reply CANNOT: <reason>.")
-        raise CoderFailure(f"the engine could not produce working code for it ({last_error})")
+        raise _failure(f"the engine could not produce working code for it ({last_error})", meta)
+
+
+def default_cache_path() -> Path:
+    """cache/coder-cache.jsonl in the repository (it is committed, so every checkout shares the
+    results); in the current directory if gnomic isn't running from a checkout."""
+    root = Path(__file__).resolve().parent.parent
+    base = root if (root / "pyproject.toml").exists() else Path.cwd()
+    return base / "cache" / "coder-cache.jsonl"
+
+
+def normalize_rule_text(text: str) -> str:
+    """The cache key form of a rule text: whitespace collapsed, trailing full stop dropped. Case is kept
+    (an "A" may be an Ace)."""
+    return " ".join(text.split()).rstrip(". ")
+
+
+class CoderCache:
+    """Coder results by text, shared by every coding request in a match (and across matches with a path)."""
+
+    def __init__(self, path: str | Path | None = None):
+        self.path = Path(path) if path else None
+        self._entries: dict[str, dict] = {}
+        self._inflight: dict[str, threading.Event] = {}
+        self._lock = threading.Lock()
+        self.hits = 0
+        self.misses = 0
+        if self.path and self.path.exists():
+            for line in self.path.read_text(encoding="utf-8").splitlines():
+                try:
+                    rec = json.loads(line)
+                    self._entries[rec["key"]] = rec["value"]
+                except (ValueError, KeyError):
+                    continue
+
+    @staticmethod
+    def key(model: str, text: str, mechanics: bool, wins: bool) -> str:
+        prompt = hashlib.sha256(coder_prompt(mechanics, wins).encode()).hexdigest()[:16]
+        return json.dumps([model, prompt, mechanics, wins, normalize_rule_text(text)])
+
+    def get_or_compute(self, key: str, compute):
+        """The cached value for key, or compute() (whose result, if not None, is cached). Concurrent
+        callers with the same key wait for the first one instead of calling the coder again."""
+        while True:
+            with self._lock:
+                if key in self._entries:
+                    self.hits += 1
+                    return self._entries[key], True
+                ev = self._inflight.get(key)
+                if ev is None:
+                    ev = self._inflight[key] = threading.Event()
+                    break
+            ev.wait()  # someone else is coding this text; use their result (or try ourselves if it failed)
+        try:
+            with self._lock:
+                self.misses += 1
+            value = compute()
+            if value is not None:
+                with self._lock:
+                    self._entries[key] = value
+                    if self.path:
+                        self.path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(self.path, "a", encoding="utf-8") as fh:
+                            fh.write(json.dumps({"key": key, "value": value}) + "\n")
+            return value, False
+        finally:
+            with self._lock:
+                self._inflight.pop(key, None)
+            ev.set()
+
+    def stats(self) -> dict:
+        return {"coder_calls": self.misses, "cache_hits": self.hits, "path": str(self.path) if self.path else None}
+
+
+class CachedRuleCoder:
+    """A RuleCoder whose results come from a CoderCache when the same text was coded before."""
+
+    def __init__(self, coder: RuleCoder, cache: CoderCache):
+        self.coder = coder
+        self.cache = cache
+
+    @property
+    def model(self) -> str:
+        return self.coder.model
+
+    def implement(self, proposal: str, samples, mechanics: bool = False, wins: bool = False) -> CoderResult:
+        key = CoderCache.key(self.model, proposal, mechanics, wins)
+        fresh: dict = {}
+
+        def compute():
+            try:
+                result = self.coder.implement(proposal, samples, mechanics=mechanics, wins=wins)
+            except CoderFailure as e:
+                answered = any("raw" in a for a in getattr(e, "meta", {}).get("attempts", []))
+                fresh["failure"] = e
+                # A coder that answered (CANNOT, or no working code) will answer the same again;
+                # API trouble is not cached.
+                return {"failure": str(e)} if answered else None
+            fresh["result"] = result
+            r = result.rule
+            return {"kind": r.kind, "description": r.description, "code": r.code}
+
+        value, cached = self.cache.get_or_compute(key, compute)
+        if not cached:
+            if "failure" in fresh:
+                raise fresh["failure"]
+            if "result" in fresh:
+                return fresh["result"]
+        if value is None:  # the other caller failed on API trouble; try ourselves
+            return self.coder.implement(proposal, samples, mechanics=mechanics, wins=wins)
+        meta = {"model": self.model, "cached": True, "attempts": [], "input_tokens": 0, "output_tokens": 0}
+        if "failure" in value:
+            err = CoderFailure(value["failure"])
+            err.meta = meta
+            raise err
+        try:
+            smoke_test(compile_rule(value["code"], value["kind"], mechanics), samples, kind=value["kind"])
+        except SandboxError:
+            return self.coder.implement(proposal, samples, mechanics=mechanics, wins=wins)
+        return CoderResult(CodeRule(value["code"], value["kind"], value["description"], proposal, mechanics), meta)

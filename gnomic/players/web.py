@@ -33,7 +33,7 @@ from typing import Callable
 from ..events import EventBus
 from ..game import PendingPlay, PlayerView, PublicEvent, StopMatch
 from ..mechanics import ANGLES, MAX_DECLARE
-from ..protocol import (ParsedReply, judge_request, parse_call, parse_play, parse_rule, render_call_retry,
+from ..protocol import (ParsedReply, judge_request, parse_call, parse_hypotheses, parse_play, parse_rule, render_call_retry,
                         render_event, render_message, render_play_retry, render_rule_state, rule_request,
                         seat_label, system_prompt, turn_request)
 from .base import Call, Choice, Player, Proposal
@@ -81,6 +81,7 @@ class WebHumanPlayer(Player):
     kind = "human"
     makes_rules = True
     live_updates = True
+    states_hypotheses = True
 
     def __init__(self, name: str, *, max_retries: int = 2):
         super().__init__(name)
@@ -143,10 +144,16 @@ class WebHumanPlayer(Player):
             self.shown, self.shown_private = max(self.shown, len(log)), max(self.shown_private, len(private))
         return events, notes
 
+    def _hyp_json(self, view: PlayerView) -> list:
+        """[[rule number, current hypothesis], ...] for every rule this player doesn't own."""
+        return [[n, self.hypotheses.get(n, "")] for n in range(1, view.num_rules + 1)
+                if n not in view.my_rule_numbers]
+
     def on_table_update(self, view: PlayerView, current: int | None) -> None:
         self._intro(view)
         events, private = self._new_lines(view.log, view.private)
         self.outbox.emit("update", events=events, private=private, view=view_json(view), current=current,
+                         hypotheses=self._hyp_json(view),
                          current_label=None if current is None else seat_label(current))
 
     def _open(self, view: PlayerView, kind: str, request: str, state: str | None,
@@ -162,9 +169,9 @@ class WebHumanPlayer(Player):
         self._open_id = rid
         self.outbox.emit(
             "request", id=rid, kind=kind, request=request,
-            message=render_message(view, events, request, state=state, private=private),
+            message=render_message(view, events, request, state=state, private=private, hypotheses=self.hypotheses),
             events=new_events, private=new_private,
-            view=view_json(view, table=state is None), notes=self.notes,
+            view=view_json(view, table=state is None), notes=self.notes, hypotheses=self._hyp_json(view),
             pending=None if pending is None else {
                 "seat": pending.seat, "label": seat_label(pending.seat), "public": pending.public(),
                 "cards": [str(c) for c in (pending.move.cards if pending.move else (pending.card,))],
@@ -186,6 +193,7 @@ class WebHumanPlayer(Player):
                 attempts.append({"error": parsed.error, "seconds": round(time.monotonic() - t0, 2)})
                 if parsed.notes:
                     self.notes = parsed.notes
+                self.record_hypotheses(view, parse_hypotheses(raw))
                 if parsed.error is None:
                     break
                 left = self.max_retries - i
@@ -195,7 +203,7 @@ class WebHumanPlayer(Player):
         finally:
             self._open_id = None
         ok = parsed if parsed is not None and parsed.error is None else None
-        self.outbox.emit("done", id=rid, accepted=ok is not None,
+        self.outbox.emit("done", id=rid, accepted=ok is not None, hypotheses=self._hyp_json(view),
                          error=None if ok else (parsed.error if parsed else None),
                          fallback=None if ok else fallback, notes=self.notes, reply=raw)
         self.reasoning_log.append({

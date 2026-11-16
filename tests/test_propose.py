@@ -237,7 +237,8 @@ def test_mechanics_with_proposed_rules(fakes, monkeypatch):
     m.run()
     added = [kw for k, kw in events if k == "rule_added"]
     # only rules that start in game 3 or later may use mechanics
-    coded = [kw for k, kw in events if k == "rule_coded" or (k == "rule_rejected" and kw["stage"] != "proposal")]
+    coded = [kw for k, kw in events if (k == "rule_coded" or (k == "rule_rejected" and kw["stage"] != "proposal"))
+             and not kw["coder"].get("cached")]  # a text coded before comes from the cache, not the coder
     assert len(coded) == len(MechCoder.systems)
     for kw, system in zip(coded, MechCoder.systems):
         assert ("TABLE MECHANICS (this rule may use them)" in system) == (kw["after_game"] >= 1)
@@ -279,7 +280,8 @@ def test_win_conditions_only_from_game_6_with_proposed_rules(fakes, monkeypatch)
                           propose_rules=True, coder="wincoder:c"),
               emit=lambda kind, **kw: events.append((kind, kw)))
     m.run()
-    coded = [kw for k, kw in events if k == "rule_coded" or (k == "rule_rejected" and kw["stage"] != "proposal")]
+    coded = [kw for k, kw in events if (k == "rule_coded" or (k == "rule_rejected" and kw["stage"] != "proposal"))
+             and not kw["coder"].get("cached")]  # a text coded before comes from the cache, not the coder
     assert len(coded) == len(WinCoder.systems)
     for kw, system in zip(coded, WinCoder.systems):
         assert ("WIN CONDITIONS (this rule may be one)" in system) == (kw["after_game"] + 2 >= 6)

@@ -111,7 +111,10 @@ spectator UI shows those notes, but other players never see them.
 | `--max-rounds N` | 20 | Rounds before a game ends with no winner |
 | `--dealer SEAT` | random | Dealer seat (0-based) |
 | `--propose-rules` | off | Dealer and winners make up their rules; baselines still get library rules |
-| `--coder SPEC` | `anthropic:claude-opus-5-5` | Coding model that implements proposed rules |
+| `--coder SPEC` | `anthropic:claude-opus-5-5` | Coding model: implements proposed rules and grades hypotheses |
+| `--no-grade` | grading on | Don't grade players' rule hypotheses |
+| `--grade-workers N` | 4 | Parallel coder sessions for grading |
+| `--coder-cache PATH` | `cache/coder-cache.jsonl` | Coder results, so no text is ever coded twice (committed; `none` = this match only) |
 | `--rule-attempts N` | 3 | Proposals per rule before a library rule is used instead |
 | `--mechanics-from N` | 3 | First game in which rules may add table mechanics (0 = never) |
 | `--wins-from N` | 6 | First game in which rules may be win conditions (0 = never) |
@@ -130,6 +133,11 @@ Per player, in the printed table and in `*.summary.json`:
 - **judging precision, recall and accuracy** on other players' plays
 - penalty and false-call draws, tokens used, and decision time
 - illegal rate per game, as a learning curve
+- **rule understanding**: with every reply, players (LLMs and humans) may state what they think
+  each rule they don't own says. The coder turns each hypothesis into code, and the engine
+  compares it with the real rule over 300 sampled situations. Reported per rule: final score,
+  mean score over the turns the rule was in effect, and turns until understood (≥95%, and staying
+  there). Nobody is scored on their own rules. The spectator UI shows the scores live.
 
 ## Spectator UI
 
@@ -157,7 +165,8 @@ with `--ui`, at a separate link with a key, so keep it away from the players.
 
 Every play costs one LLM call per LLM player: the player, plus each rule owner judging it.
 A 4-LLM game of about 80 turns makes roughly 320 calls. Judging calls run in parallel.
-`--propose-rules` adds a few calls per new rule. Start with short matches (`--games 2
+`--propose-rules` adds a few calls per new rule, and grading adds a coder call per new hypothesis
+text. The coder cache (`cache/coder-cache.jsonl`, committed) means no text is ever coded twice. Start with short matches (`--games 2
 --max-rounds 10`) and the baselines.
 
 ## Development

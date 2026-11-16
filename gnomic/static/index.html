@@ -124,6 +124,13 @@
   details pre { white-space: pre-wrap; word-wrap: break-word; margin: 4px 0 0; font: inherit; color: var(--muted); }
   .private-note { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 
+  #understanding td, #understanding th { text-align: center; }
+  #understanding td:first-child, #understanding th:first-child { text-align: left; }
+  .u { display: inline-block; min-width: 46px; padding: 1px 6px; border-radius: 10px; font-weight: 600; cursor: help; }
+  .u.ok { background: var(--good-soft); color: var(--good); }
+  .u.mid { background: var(--warn-soft); color: var(--warn); }
+  .u.low { background: var(--bad-soft); color: var(--bad); }
+  .u.none, .u.own, .u.wait { background: var(--line); color: var(--muted); font-weight: 400; }
   #summary { display: none; }
   #summary.show { display: block; }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 13px; }
@@ -161,6 +168,10 @@
     <section class="panel" id="rules">
       <h2>Rules in effect <span style="text-transform:none;letter-spacing:0">(hidden from players; later rules take precedence)</span></h2>
       <ol id="ruleList"><li class="empty">No rules yet.</li></ol>
+    </section>
+    <section class="panel" id="understanding">
+      <h2>Understanding <span style="text-transform:none;letter-spacing:0">(each player's current hypothesis, coded and compared with the real rule)</span></h2>
+      <div id="understandingBody"><span class="empty">No hypotheses yet.</span></div>
     </section>
     <section class="panel" id="summary">
       <h2>Match summary</h2>
@@ -208,6 +219,7 @@ function reset() {
     players: [], dealer: null, numGames: 0, game: null, turn: null, rules: [], discard: [], deck: null,
     hands: {}, handSizes: [], scores: [], status: {}, current: null, log: [], reasoning: {}, notes: {},
     lastPlay: null, summary: null, controls: { paused: false, delay: 0 }, ended: false,
+    hyp: {}, grades: {}, threshold: 0.95,
     marks: {}, round: null, maxRounds: null,
   };
   dirty = true;
@@ -334,6 +346,16 @@ function apply(ev) {
       if (ev.winner !== null && ev.winner !== undefined) S.scores[ev.winner] = (S.scores[ev.winner] || 0) + 1;
       S.status = {}; S.current = null;
       S.log.push({ sys: true, text: ev.winner === null ? `Game ${ev.game + 1} ends with no winner (round limit: ${ev.turns} turns).` : `Game ${ev.game + 1} won by ${P(ev.winner)} ${ev.winner_name} after ${ev.turns} turns${ev.reason && ev.reason.startsWith("win_rule") ? ` (win condition ${ev.reason.split(" ")[1]})` : ""}.` });
+      break;
+    case "hypothesis": {
+      const k = hypKey(ev.rule, ev.text);
+      (S.hyp[ev.player] ||= {})[ev.rule] = { text: ev.text, key: k, turn: ev.match_turn };
+      if (!ev.text) S.grades[k] = { score: 0, error: "no hypothesis" };
+      else if (ev.graded && !(k in S.grades)) S.grades[k] = { score: ev.score };
+      break;
+    }
+    case "hypothesis_graded":
+      S.grades[hypKey(ev.rule, ev.text)] = ev;
       break;
     case "match_end":
       S.summary = ev.summary; S.ended = true; S.status = {}; S.current = null;
@@ -514,6 +536,34 @@ function renderReasoning(now) {
   }).join("") || '<div class="empty">No entries yet.</div>');
 }
 
+// Same key as the engine's coder cache: whitespace collapsed, trailing full stop dropped.
+function hypKey(rule, text) { return rule + "|" + String(text || "").split(/\s+/).join(" ").trim().replace(/[. ]+$/, ""); }
+
+function renderUnderstanding() {
+  const names = Object.keys(S.hyp);
+  if (!names.length || !S.rules.length) return;
+  const th = S.threshold;
+  const head = S.rules.map((r, i) => `<th title="${esc(r.rule.description)}">R${i + 1}</th>`).join("");
+  const rows = S.players.map((p) => {
+    const cells = S.rules.map((r, i) => {
+      if (r.owner === p.name) return `<td><span class="u own" title="their own rule">own</span></td>`;
+      const h = (S.hyp[p.name] || {})[i + 1];
+      if (!h) return `<td><span class="u none" title="no hypothesis yet">–</span></td>`;
+      const g = S.grades[h.key];
+      const tip = `“${h.text || "?"}”` + (g && g.description ? `\ncoded as (${g.coded_kind}): ${g.description}` : "")
+        + (g && g.error ? `\n${g.error}` : "");
+      if (!g || g.score === null || g.score === undefined)
+        return `<td><span class="u wait" title="${esc(tip)}">…</span></td>`;
+      const cls = g.score >= th ? "ok" : g.score >= 0.5 ? "mid" : "low";
+      return `<td><span class="u ${cls}" title="${esc(tip)}">${Math.round(g.score * 100)}%</span></td>`;
+    }).join("");
+    return `<tr><td>${esc(p.name)}</td>${cells}</tr>`;
+  }).join("");
+  $("understandingBody").innerHTML = `<div style="overflow-x:auto"><table><thead><tr><th>Player</th>${head}</tr></thead>
+    <tbody>${rows}</tbody></table></div><div class="private-note">Hover a score for the hypothesis. Green = understood
+    (≥ ${Math.round(th * 100)}% agreement over sampled situations).</div>`;
+}
+
 function renderSummary() {
   const el = $("summary");
   if (!S.summary) { el.classList.remove("show"); return; }
@@ -522,15 +572,19 @@ function renderSummary() {
   const rows = S.summary.players.map((p) => `<tr><td>${esc(p.name)}</td><td>${p.wins}</td><td>${p.plays}</td>
     <td>${pct(p.illegal_rate)}</td><td>${pct(p.avoidable_illegal_rate)}</td><td>${p.caught}/${p.illegal}</td>
     <td>${pct(p.self_call_rate)}</td><td>${pct(p.judge_precision)}</td><td>${pct(p.judge_recall)}</td>
-    <td>${pct(p.judge_accuracy)}</td><td>${p.avg_decision_seconds ?? "–"}s</td><td>${fmtTok(p.input_tokens)}/${fmtTok(p.output_tokens)}</td></tr>`).join("");
+    <td>${pct(p.judge_accuracy)}</td><td>${p.rules_to_learn ? `${p.rules_understood}/${p.rules_to_learn}` : "–"}</td>
+    <td>${pct(p.understanding_score)}</td><td>${p.mean_turns_to_understand ?? "–"}</td>
+    <td>${p.avg_decision_seconds ?? "–"}s</td><td>${fmtTok(p.input_tokens)}/${fmtTok(p.output_tokens)}</td></tr>`).join("");
   $("summaryBody").innerHTML = `<div style="overflow-x:auto"><table><thead><tr><th>Player</th><th>Wins</th><th>Plays</th>
     <th>Illegal</th><th>Avoidable illegal</th><th>Caught</th><th>Self-call</th><th>Call precision</th><th>Call recall</th>
-    <th>Call accuracy</th><th>Avg time</th><th>Tokens in/out</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    <th>Call accuracy</th><th title="rules understood / rules to learn (not their own)">Understood</th>
+    <th title="mean agreement over the turns each rule was in effect">Understanding</th>
+    <th title="mean turns from a rule's start until understood for good">Turns to understand</th><th>Avg time</th><th>Tokens in/out</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function render() {
   const now = Date.now() / 1000 + offset;
-  renderHeader(); renderPlayers(now); renderTable(); renderRules(); renderLog(); renderReasoning(now); renderSummary();
+  renderHeader(); renderPlayers(now); renderTable(); renderRules(); renderLog(); renderReasoning(now); renderUnderstanding(); renderSummary();
 }
 
 let caughtUp = false;
