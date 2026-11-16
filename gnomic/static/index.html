@@ -473,7 +473,9 @@ function renderTable() {
   const b = $("banner");
   if (!lp) { b.className = "banner"; b.innerHTML = '<span class="empty">No plays yet.</span>'; return; }
   b.className = "banner " + (!lp.resolved ? "" : lp.missed ? "warn" : lp.upheld ? "bad" : lp.callers?.length ? "good" : "");
-  const tb = S.table ? `<div style="font-size:12px;color:var(--muted);margin-bottom:4px">Order: ${S.table.direction === 1 ? "seat order" : "reversed"}${S.table.pot ? ` · pot on DISCARD: ${S.table.pot}` : ""}${S.table.declared ? ` · declared “${esc(S.table.declared[0])}” by ${P(S.table.declared[1])}` : ""}</div>` : "";
+  const tbParts = !S.table ? [] : [S.table.pot ? `pot on DISCARD: ${S.table.pot}` : "",
+    S.table.declared ? `declared “${esc(S.table.declared[0])}” by ${P(S.table.declared[1])}` : ""].filter(Boolean);
+  const tb = tbParts.length ? `<div style="font-size:12px;color:var(--muted);margin-bottom:4px">${tbParts.join(" · ")}</div>` : "";
   b.innerHTML = tb + `<b>${P(lp.seat)} ${esc(lp.player)}</b> played ${lp.move ? esc(lp.move_text) : cardHTML(lp.card, "inline")} on ${lp.top_before ? cardHTML(lp.top_before, "inline") : "empty DISCARD"} · ${playOutcome(lp)}
     ${lp.deciding_rule ? `<div style="font-size:12px;color:var(--muted);margin-top:4px">Decided by R${Math.max(0, lp.deciding_rule_index + 1)}: ${esc(lp.deciding_rule)}</div>` : ""}`;
 }

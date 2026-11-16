@@ -207,8 +207,9 @@ class MechCoder(ChatSession):
 
     def send(self, text):
         if "TABLE MECHANICS (this rule may use them)" in self.system:
-            return Completion("KIND: effect\nDESCRIPTION: Playing a King reverses the order of play.\n"
-                              "```python\ndef effect(ctx, fx):\n    if ctx.card.rank == 13:\n        fx.reverse()\n```")
+            return Completion("KIND: effect\nDESCRIPTION: Playing a King makes the next player draw 1.\n"
+                              "```python\ndef effect(ctx, fx):\n    if ctx.card.rank == 13:\n"
+                              "        fx.draw(ctx.next_player, 1)\n```")
         return Completion("KIND: restriction\nDESCRIPTION: You may not play a red card on a black card.\n"
                           "```python\n" + RED_ON_BLACK + "```")
 
@@ -216,11 +217,11 @@ class MechCoder(ChatSession):
 class OptionPlayer(FakePlayer):
     """Like FakePlayer, but plays at angle 90 once table mechanics are on, and proposes many rules."""
     provider = "optp"
-    proposals = ["No red card on a black card.", "Kings reverse the order.", "Kings reverse the order."]
+    proposals = ["No red card on a black card.", "Kings make the next player draw.", "Kings make the next player draw."]
 
     def send(self, text):
         comp = super().send(text)
-        if "YOUR TURN" in text.splitlines()[-1] and "\nORDER:" in text:
+        if "YOUR TURN" in text.splitlines()[-1] and "\nTOKENS:" in text:
             comp.text = comp.text.replace("\nCALL: NONE", "\nANGLE: 90\nCALL: NONE")
         return comp
 

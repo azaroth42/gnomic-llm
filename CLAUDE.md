@@ -172,10 +172,27 @@ Clarifications and decisions (all made by the user unless marked *default*):
 ### Table mechanics from game 3 (`mechanics.py`; `--mechanics-from N`, default 3, 0 = off)
 - **User decision:** from game 3, rules may add new things to the game: a **space** in front of
   each player, **tokens** collected and spent, cards played at **angles**, **rotating** cards,
-  **trading** cards, **reversing** the order of play. From the proposed list the user also accepted:
-  **skip** the next player, **extra turn**, **multi-card plays**, **effect draws** (not penalties),
-  **declarations**, **stealing from spaces**, **peeking** at hidden cards. Rejected: passing and
-  drawing instead of playing. Any other new effect must be proposed to the user first.
+  **trading** cards. From the proposed list the user also accepted: **multi-card plays**,
+  **effect draws** (not penalties), **declarations**, **stealing from spaces**, **peeking** at
+  hidden cards. Rejected: passing and drawing instead of playing. Any other new effect must be
+  proposed to the user first.
+- **No rule changes the order of play** (user decision): reversing, skips and extra turns were
+  accepted at first, then removed. The engine decides whose turn it is, so nobody can play out of
+  turn, and the engine asking someone to play would reveal a rule that only its owner should know.
+  Play always goes in seat order, so `ctx.next_player` is always the next seat.
+- **Components must exist before a rule may use them** (user decision; `rules.missing_components`).
+  Every game starts with no tokens and empty spaces. Tokens come into the game only from the bank
+  and cards reach a space only through effects. So a rule that uses **tokens** (held, in spaces, the pot,
+  `SPEND`) or **cards in spaces** is rejected unless a rule in effect, or the rule itself, brings
+  them in. `rule_problem` gives the reason ("no rule in effect ever gives anyone a token"), and
+  `generate_rule` skips such library rules (e.g. `pot_ante` and `spend_wild` wait for a token source).
+  How it's measured, for library and coded rules alike: a rule *provides* a component if an
+  effect call it records moves tokens out of the bank or moves a card into a space from somewhere
+  else. It *uses* one if it records a call that moves tokens or space cards away (or rotates a space
+  card), or if its behaviour on the samples changes when that component is blanked out. Available
+  components are found to a fixpoint, with still-missing components blanked, so "if you have a
+  token, gain another" is not a source. Cards on DISCARD always exist. The system prompt and
+  `MAKE A RULE` say so.
 - **Rules can never change what a penalty does** (user decision): offender draws 1 (once), false
   caller draws 1. The effects API has no access to penalties.
 - **Gating:** a rule may use mechanics only if it first applies in game ≥ `mechanics_from`
@@ -192,7 +209,7 @@ Clarifications and decisions (all made by the user unless marked *default*):
   (`BASE_RULE = -1` in `decide`/`violated`; `PublicEvent.engine_call`). It costs the usual draw 1,
   once, together with any upheld player calls.
 - **Effects:** a third rule kind, `effect`, never judges legality. It defines `effect(ctx, fx)`,
-  which records calls on `mechanics.Effects`: reverse, skip, extra_turn, draw, to_space,
+  which records calls on `mechanics.Effects`: draw, to_space,
   rotate_top/space, trade, peek_deck/hand, plus the general moves below. Counts are 1..3,
   with ≤6 calls per rule per play. The engine applies them after resolution, oldest rule first,
   **only if no penalty was upheld** (user decision), and logs each publicly. Peeks and trades send
@@ -209,19 +226,17 @@ Clarifications and decisions (all made by the user unless marked *default*):
   decision; see Win). A card moved hand to hand is shown publicly as "a card moved"; the two
   players get PRIVATE notices naming it. Any other move names the card publicly. Cards keep
   their angle when moved between table places.
-- **Turn order:** next = seat + direction × (1 + skips), or the same seat after an extra turn. The
-  round limit is still `max_rounds × players` turns (*default*).
-- **Table state** (public, reset each game): direction, tokens held, tokens in spaces, the pot, spaces (cards with angles),
-  DISCARD angles (`9C@90`), latest declaration (lowercased). STATE adds `ORDER`, `TOKENS`,
+- **Table state** (public, reset each game): tokens held, tokens in spaces, the pot, spaces (cards with angles),
+  DISCARD angles (`9C@90`), latest declaration (lowercased). STATE adds `TOKENS`,
   `SPACES` and `DECLARED` lines (TOKENS also shows space tokens and the pot). `PlayContext` gains `move` and `table`, exposed as `ctx.cards`,
-  `angle`, `spend`, `target`, `declare`, `direction`, `next_player`, `tokens`, `spaces`,
+  `angle`, `spend`, `target`, `declare`, `next_player`, `tokens`, `spaces`,
   `space_tokens`, `pot`, `pile_angles`, `declared`, `declared_by` and `game`. Without mechanics they hold neutral defaults.
 - **Library:** mechanics templates (`mechanics=True`) are drawn only for game-3+ rules. They are
   pair_ok, spend_wild, face_sideways and declared_suit_after (Crazy-8s style), plus effects
-  reverse/skip/extra_turn/draw on a rank, token_on_face, space_on_rank, trade_on_target,
+  draw on a rank, token_on_face, space_on_rank, trade_on_target,
   tribute_on_rank (the next player gives you their highest card) and pot_ante (face cards ante a
   token into the pot; an Ace takes the pot).
-  With mechanics on, a new rule is an effect with probability 0.35. Effect rules must fire on
+  With mechanics on, a new rule is an effect with probability 0.3 (lowered from 0.35, user decision). Effect rules must fire on
   2–50% of sampled plays (`rule_problem`). `sample_contexts(mechanics=True)` randomizes the
   table and the move's options, and 25% of samples are multi-card moves.
   `evaluate_candidate` measures playability on the single-card version of each sampled move

@@ -21,7 +21,7 @@ half, or odd/even). No square roots, exponents, primes, modular wrap-around, etc
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Callable, Iterable
 
@@ -45,12 +45,8 @@ class _TableView:
 
     # ---- the table ----
     @property
-    def direction(self) -> int:
-        return self.table.direction if self.table else 1
-
-    @property
     def next_player(self) -> int:
-        return (self.player + self.direction) % self.num_players
+        return (self.player + 1) % self.num_players
 
     @property
     def tokens(self) -> tuple[int, ...]:
@@ -106,7 +102,7 @@ class PlayContext(_TableView):
     turn: int                     # 0-based turn number within the game
     num_players: int
     move: Move | None = None      # the whole move, if it has options or several cards (game 3+)
-    table: TableState | None = None  # direction, tokens, spaces, angles, declaration (game 3+)
+    table: TableState | None = None  # tokens, spaces, angles, declaration (game 3+)
 
     # ---- the move (see mechanics.py); defaults describe a plain one-card play ----
     @property
@@ -538,21 +534,6 @@ _LIST: list[RuleTemplate] = [
                             and ctx.declared in _SUIT_WORDS and ctx.card.rank != r
                             and _SUIT_WORDS[ctx.declared] != ctx.card.suit),
                  lambda rng: {"r": rng.choice([1, 8, 11])}, mechanics=True, weight=0.6),
-    RuleTemplate("reverse_on_rank", "effect",
-                 lambda r: f"Playing one of the {_rank_word(r)} reverses the order of play.",
-                 lambda r: (lambda ctx: ctx.card.rank == r),
-                 lambda rng: {"r": rng.randint(1, 13)}, mechanics=True,
-                 effect=lambda r: (lambda ctx, fx: fx.reverse())),
-    RuleTemplate("skip_on_rank", "effect",
-                 lambda r: f"Playing one of the {_rank_word(r)} skips the next player.",
-                 lambda r: (lambda ctx: ctx.card.rank == r),
-                 lambda rng: {"r": rng.randint(1, 13)}, mechanics=True,
-                 effect=lambda r: (lambda ctx, fx: fx.skip())),
-    RuleTemplate("extra_turn_on_rank", "effect",
-                 lambda r: f"Playing one of the {_rank_word(r)} gives you another turn.",
-                 lambda r: (lambda ctx: ctx.card.rank == r),
-                 lambda rng: {"r": rng.randint(1, 13)}, mechanics=True, weight=0.6,
-                 effect=lambda r: (lambda ctx, fx: fx.extra_turn())),
     RuleTemplate("draw_on_rank", "effect",
                  lambda r, n: f"Playing one of the {_rank_word(r)} makes the next player draw {n}.",
                  lambda r, n: (lambda ctx: ctx.card.rank == r),
@@ -611,7 +592,7 @@ _DECLARATIONS = ("hearts", "spades", "diamonds", "clubs", "red", "black", "last 
 
 def sample_contexts(rng: random.Random, n: int = 400, mechanics: bool = False) -> list[tuple[PlayContext, list[Card]]]:
     """Random game situations: (context template, candidate cards). With `mechanics`, the
-    table (direction, tokens, spaces, angles, declaration) and the move's options and extra
+    table (tokens, spaces, angles, declaration) and the move's options and extra
     cards are randomized too; the candidate replaces the move's first card."""
     out = []
     deck = full_deck()
@@ -642,7 +623,7 @@ def sample_contexts(rng: random.Random, n: int = 400, mechanics: bool = False) -
             free = [c for c in deck if c not in used]
             spaces = tuple(tuple(Placed(free.pop(), rng.choice(ANGLES)) for _ in range(rng.choice([0, 0, 1, 2, 3])))
                            for _ in range(num_players))
-            table = TableState(direction=rng.choice([1, -1]), tokens=tokens, spaces=spaces,
+            table = TableState(tokens=tokens, spaces=spaces,
                                space_tokens=tuple(rng.choice([0, 0, 0, 1, 2]) for _ in range(num_players)),
                                pot=rng.choice([0, 0, 1, 2, 3, 5]),
                                angles=tuple(rng.choice(ANGLES) if rng.random() < 0.3 else 0 for _ in pile),
@@ -729,6 +710,144 @@ def effect_share(rule, samples) -> float:
     return hits / total
 
 
+# --------------------------------------------------------------------------
+# A rule may only use table components that exist (user decision)
+# --------------------------------------------------------------------------
+# Every game starts with no tokens anywhere and every space empty. Tokens come into the game
+# only from the bank, and cards reach a space only, through effects. So a rule may use
+# tokens (held, in spaces, the pot, SPEND) or cards in spaces only if some rule in effect, or
+# the rule itself, can actually bring them into the game.
+
+COMPONENTS = ("tokens", "spaces")
+MISSING_COMPONENT = {
+    "tokens": ("it uses tokens, but no rule in effect ever gives anyone a token (every game starts with no "
+               "tokens; they only come from the bank, through an effect)"),
+    "spaces": ("it uses cards in players' spaces, but no rule in effect ever puts a card into a space (every "
+               "game starts with the spaces empty; cards only get there through an effect)"),
+}
+
+
+def _without(ctx, components: Iterable[str]):
+    """The same situation with the given components absent: no tokens anywhere (so no SPEND
+    either), or every space empty. Works for PlayContext and WinContext."""
+    t = ctx.table
+    if t is None:
+        return ctx
+    changes: dict = {}
+    for comp in components:
+        n = ctx.num_players
+        if comp == "tokens":
+            t = replace(t, tokens=(0,) * n, space_tokens=(0,) * n, pot=0)
+            move = getattr(ctx, "move", None)
+            if move is not None and move.spend:
+                changes["move"] = replace(move, spend=0)
+        elif comp == "spaces":
+            t = replace(t, spaces=((),) * n)
+    return replace(ctx, table=t, **changes)
+
+
+def _op_components(op: tuple) -> tuple[set[str], set[str]]:
+    """(provides, uses) for one recorded effect call (see mechanics.Effects)."""
+    kind = op[0]
+    if kind == "move_tokens":
+        return ({"tokens"}, set()) if op[1] == ("bank",) else (set(), {"tokens"})
+    if kind == "move_card":
+        if op[1][0] == "space":
+            return set(), {"spaces"}
+        return ({"spaces"} if op[2][0] == "space" else set()), set()
+    if kind == "to_space":
+        return {"spaces"}, set()
+    if kind == "rotate_space":
+        return set(), {"spaces"}
+    return set(), set()
+
+
+def _effect_ops(rule, ctx) -> tuple | None:
+    fx = Effects(ctx.num_players)
+    try:
+        rule.effect(ctx, fx)
+    except Exception:  # noqa: BLE001 - a broken effect does nothing
+        return None
+    return tuple(fx.ops)
+
+
+def _behaviour(rule, samples, absent: Iterable[str] = ()) -> list:
+    """What the rule does on every sampled play (verdicts, effect calls, or win checks)."""
+    absent = tuple(absent)
+    if rule.kind == "win":
+        out = []
+        for w in win_contexts(samples):
+            try:
+                out.append(bool(rule.wins(_without(w, absent))))
+            except Exception:  # noqa: BLE001
+                out.append(None)
+        return out
+    out = []
+    for ctx, cands in samples:
+        base = _without(ctx, absent)
+        for c in cands[:13]:
+            cc = _with_card(base, c)
+            if rule.kind == "effect":
+                out.append(_effect_ops(rule, cc))
+            else:
+                try:
+                    out.append(rule.verdict(cc))
+                except Exception:  # noqa: BLE001
+                    out.append(None)
+    return out
+
+
+def _uses_mechanics(rule) -> bool:
+    return bool(getattr(rule, "mechanics", True))
+
+
+def components_used(rule, samples) -> set[str]:
+    """Components the rule takes from (an effect moving tokens or space cards away) or depends
+    on (it acts differently when the component is absent)."""
+    if not _uses_mechanics(rule) or not any(ctx.table is not None for ctx, _ in samples):
+        return set()
+    used: set[str] = set()
+    base = _behaviour(rule, samples)
+    if rule.kind == "effect":
+        for ops in base:
+            for op in ops or ():
+                used |= _op_components(op)[1]
+    for comp in COMPONENTS:
+        if comp not in used and _behaviour(rule, samples, absent=(comp,)) != base:
+            used.add(comp)
+    return used
+
+
+def components_available(rules: list, samples) -> set[str]:
+    """Components the rules can bring into a game that starts without any. A rule that only
+    brings in tokens when there already are some ("if you have a token, gain another") brings
+    in none: sources are found with the still-missing components absent, until nothing changes."""
+    effects = [r for r in rules if r.kind == "effect" and _uses_mechanics(r)]
+    have: set[str] = set()
+    while effects:
+        absent = [c for c in COMPONENTS if c not in have]
+        found = set(have)
+        for r in effects:
+            for ops in _behaviour(r, samples, absent=absent):
+                for op in ops or ():
+                    found |= _op_components(op)[0]
+        if found == have:
+            break
+        have = found
+    return have
+
+
+def missing_components(existing: list, new, samples, have: set[str] | None = None) -> list[str]:
+    """Components `new` uses that neither the rules in effect nor `new` itself bring into the game."""
+    used = components_used(new, samples)
+    if have is None:
+        have = components_available(existing, samples)
+    if used <= have:
+        return []
+    have = components_available(list(existing) + [new], samples)
+    return [c for c in COMPONENTS if c in used and c not in have]
+
+
 @dataclass
 class RuleCheck:
     mean_legal: float       # average fraction of cards legal after adding the rule
@@ -782,6 +901,9 @@ def rule_problem(existing: list, new, samples, *, first: bool | None = None) -> 
     if first and new.kind != "restriction":
         return ("the first rule must be a restriction (it must forbid some plays); "
                 "a permission does nothing when no other rule forbids anything")
+    missing = missing_components(existing, new, samples)
+    if missing:
+        return MISSING_COMPONENT[missing[0]]
     if new.kind == "win":
         if first:
             return "the first rule must be a restriction"
@@ -823,7 +945,7 @@ def rule_from_json(d: dict):
 def generate_rule(existing: list[Rule], rng: random.Random, *, min_mean_legal: float = MIN_MEAN_LEGAL,
                   min_ok_share: float = MIN_OK_SHARE, min_changed: float = MIN_CHANGED,
                   permission_share: float = 0.4, loosen_below: float = 0.4,
-                  max_attempts: int = 300, mechanics: bool = False, effect_share: float = 0.35,
+                  max_attempts: int = 300, mechanics: bool = False, effect_share: float = 0.3,
                   wins: bool = False, win_share: float = 0.25) -> Rule:
     """Pick a random rule that keeps the game playable and changes some verdicts.
 
@@ -845,6 +967,7 @@ def generate_rule(existing: list[Rule], rng: random.Random, *, min_mean_legal: f
     restrictions alone the game can collapse until nothing is playable.
     """
     samples = sample_contexts(rng, 300, mechanics=mechanics)
+    have = components_available(existing, samples) if mechanics else set()
     used = {r.key() for r in existing}
     by_kind = {k: [t for t in _LIST if t.kind == k and (mechanics or not t.mechanics)]
                for k in ("restriction", "permission", "effect", "win")}
@@ -869,6 +992,8 @@ def generate_rule(existing: list[Rule], rng: random.Random, *, min_mean_legal: f
         if kind in ("effect", "win"):
             if rule_problem(existing, rule, samples) is None:
                 return rule
+            continue
+        if mechanics and missing_components(existing, rule, samples, have):
             continue
         check = evaluate_candidate(existing, rule, samples)
         if (check.mean_legal >= min_mean_legal and check.min_ok_share >= min_ok_share

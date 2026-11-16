@@ -206,8 +206,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rule-attempts", type=int, default=3, metavar="N",
                    help="with --propose-rules, how many rules to ask for before using a library rule (default: %(default)s)")
     p.add_argument("--mechanics-from", type=int, default=3, metavar="N",
-                   help="from game N on, rules may add table mechanics (tokens, spaces, angles, trades, reversing, "
-                        "skips, effects, multi-card plays...); 0 disables (default: %(default)s)")
+                   help="from game N on, rules may add table mechanics (tokens, spaces, angles, trades, "
+                        "effects, multi-card plays...); 0 disables (default: %(default)s)")
     p.add_argument("--wins-from", type=int, default=6, metavar="N",
                    help="from game N on, rules may be win conditions (checked only at the end of the player's own "
                         "turn); 0 disables (default: %(default)s)")

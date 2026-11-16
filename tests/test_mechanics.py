@@ -52,48 +52,47 @@ def game(players, rules, hands, top="5S", deck=("2C", "3C", "4C", "6C", "7C"), m
 
 def test_multi_card_play_breaks_r0_and_engine_calls_it():
     a, b = Mover("a", [Move((C("8H"), C("8D")))]), Mover("b")
-    g, events = game([a, b], [Rule("reverse_on_rank", {"r": 8})], [["8H", "8D", "9S"], ["2D"]])
+    g, events = game([a, b], [Rule("draw_on_rank", {"r": 8, "n": 1})], [["8H", "8D", "9S"], ["2D"]])
     g.play()
     ev = g.log.events[-2]
     assert ev.engine_call and ev.upheld and ev.penalized == (0,)
-    assert len(g.hands[0]) == 2 and g.direction == 1          # drew 1; the effect was cancelled
+    assert len(g.hands[0]) == 2 and len(g.hands[1]) == 1      # drew 1; the effect was cancelled
     assert "the engine under R0 (upheld)" in render_event(ev) and "8H 8D" in render_event(ev)
 
 
 def test_pair_permission_allows_multi_card_play_and_effects_fire():
     a, b, c = Mover("a", [Move((C("8H"), C("8D")))]), Mover("b"), Mover("c")
-    rules = [Rule("pair_ok"), Rule("reverse_on_rank", {"r": 8}), Rule("token_on_face")]
+    rules = [Rule("pair_ok"), Rule("draw_on_rank", {"r": 8, "n": 1}), Rule("token_on_face")]
     g, _ = game([a, b, c], rules, [["8H", "8D", "9S"], ["2D"], ["3D"]])
     g.play()
     ev = g.log.events[-2]
     assert not ev.engine_call and ev.upheld is None
     assert g.hands[0] == [C("9S")] and g.discard[-2:] == [C("8H"), C("8D")]
-    assert g.direction == -1 and g.current == 2                # reversed: P1 -> P3
-    assert ev.effects == ("order of play reversed",)
+    assert len(g.hands[1]) == 2 and g.current == 1             # P2 drew 1 and plays next
+    assert ev.effects == ("P2 draws 1",)
 
 
-def test_skip_extra_turn_tokens_and_spaces():
-    rules = [Rule("skip_on_rank", {"r": 9}), Rule("extra_turn_on_rank", {"r": 7}), Rule("token_on_face"),
-             Rule("space_on_rank", {"r": 4})]
-    a, b, c = Mover("a", ["9S", "7S", "KS", "4S"]), Mover("b", ["2D"]), Mover("c", ["3D"])
-    g, _ = game([a, b, c], rules, [["9S", "7S", "KS", "4S", "AS"], ["2D", "2H"], ["3D", "3H"]], max_turns=5)
+def test_tokens_and_spaces_in_seat_order():
+    rules = [Rule("token_on_face"), Rule("space_on_rank", {"r": 4})]
+    a, b, c = Mover("a", ["KS", "4S"]), Mover("b", ["2D"]), Mover("c", ["3D"])
+    g, _ = game([a, b, c], rules, [["KS", "4S", "AS"], ["2D", "2H"], ["3D", "3H"]], max_turns=4)
     g.play()
     seats = [e.player for e in g.log.events if e.kind == "play"]
-    # a plays 9 (skips b) -> c; c plays; a plays 7 (extra turn) -> a plays K -> b plays -> ...
-    assert seats[:5] == [0, 2, 0, 0, 1]
+    # a plays K (token) -> b -> c -> a plays 4 (into a's space); play always goes in seat order
+    assert seats == [0, 1, 2, 0]
     assert g.tokens[0] == 1
-    assert [str(p.card) for p in g.spaces[0]] == [] and C("KS") in g.discard
+    assert [str(p.card) for p in g.spaces[0]] == ["4S"] and C("KS") in g.discard
 
 
 def test_effects_cancelled_when_penalty_upheld_but_spend_is_kept():
     owner_calls = lambda view, play: 1  # P2 owns R1 and always calls it
     a, b = Mover("a", [Move((C("8H"),), spend=1)]), Mover("b", calls=owner_calls)
-    rules = [Rule("no_red_on_black"), Rule("reverse_on_rank", {"r": 8})]
+    rules = [Rule("no_red_on_black"), Rule("draw_on_rank", {"r": 8, "n": 1})]
     g, _ = game([a, b], rules, [["8H", "9S"], ["2D"]], owners=[1, 0])
     g.tokens = [2, 0]
     g.play()
     ev = g.log.events[-2]
-    assert ev.upheld and g.direction == 1 and g.tokens == [1, 0] and not ev.effects
+    assert ev.upheld and len(g.hands[1]) == 1 and g.tokens == [1, 0] and not ev.effects
 
 
 def test_trade_is_private_to_the_two_players():
@@ -119,12 +118,16 @@ def test_peek_effect_from_code_rule_and_view_state():
     assert g.private[0] == ["G3 T1 peek: P2 holds 5D"]
     assert g.declared == ("hearts", 0)
     state = render_state(b.views[-1])
-    assert 'DECLARED: "hearts" by P1' in state and "TOKENS:" in state and "ORDER:" in state
+    assert 'DECLARED: "hearts" by P1' in state and "TOKENS:" in state and "ORDER:" not in state
 
 
 def test_sandbox_gates_mechanics():
     with pytest.raises(SandboxError):
-        compile_rule("def effect(ctx, fx):\n    fx.reverse()", "effect", mechanics=False)
+        compile_rule("def effect(ctx, fx):\n    fx.gain_tokens(ctx.player, 1)", "effect", mechanics=False)
+    # turn-order effects were removed: play always goes in seat order
+    for gone in ("fx.reverse()", "fx.skip()", "fx.extra_turn()", "x = ctx.direction"):
+        with pytest.raises(SandboxError):
+            compile_rule(f"def effect(ctx, fx):\n    {gone}", "effect", mechanics=True)
     with pytest.raises(SandboxError, match="attribute .tokens"):
         compile_rule("def applies(ctx):\n    return ctx.tokens[0] > 1")
     compile_rule("def applies(ctx):\n    return ctx.tokens[ctx.player] > 1", mechanics=True)
@@ -141,16 +144,16 @@ def test_effects_api_validates_arguments():
     with pytest.raises(ValueError):
         fx.trade(1, 1)
     for _ in range(6):
-        fx.skip()
+        fx.gain_tokens(0, 1)
     with pytest.raises(ValueError):
-        fx.skip()
+        fx.gain_tokens(0, 1)
 
 
 def test_effect_rule_vetting_and_library_generation():
     samples = sample_contexts(random.Random(2), 120, mechanics=True)
-    always = CodeRule("def effect(ctx, fx):\n    fx.reverse()", "effect", "x", mechanics=True)
-    never = CodeRule("def effect(ctx, fx):\n    if ctx.card.rank > 20:\n        fx.reverse()", "effect", "x", mechanics=True)
-    kings = CodeRule("def effect(ctx, fx):\n    if ctx.card.rank == 13:\n        fx.reverse()", "effect", "x", mechanics=True)
+    always = CodeRule("def effect(ctx, fx):\n    fx.gain_tokens(ctx.player, 1)", "effect", "x", mechanics=True)
+    never = CodeRule("def effect(ctx, fx):\n    if ctx.card.rank > 20:\n        fx.gain_tokens(ctx.player, 1)", "effect", "x", mechanics=True)
+    kings = CodeRule("def effect(ctx, fx):\n    if ctx.card.rank == 13:\n        fx.gain_tokens(ctx.player, 1)", "effect", "x", mechanics=True)
     stack = [Rule("no_red_on_black")]
     assert "too often" in rule_problem(stack, always, samples)
     assert "almost never" in rule_problem(stack, never, samples)
@@ -304,3 +307,42 @@ def test_win_rules_gated_vetted_and_coded():
     assert "win" in kinds
     assert all(generate_rule([Rule("no_red_on_black")], random.Random(s), mechanics=True).kind != "win"
                for s in range(30))
+
+
+def test_rules_may_only_use_components_that_exist():
+    from gnomic.rules import components_available, components_used, missing_components
+    samples = sample_contexts(random.Random(4), 200, mechanics=True)
+    base = [Rule("match_parity")]
+    code = lambda kind, body: CodeRule(body, kind, "x", mechanics=True)  # noqa: E731
+    # library rules: sources and users
+    assert components_available([Rule("token_on_face")], samples) == {"tokens"}
+    assert components_available([Rule("space_on_rank", {"r": 4})], samples) == {"spaces"}
+    assert components_used(Rule("pot_ante"), samples) == {"tokens"}
+    assert components_used(Rule("spend_wild"), samples) == {"tokens"}
+    assert components_used(Rule("token_on_face"), samples) == set()
+    assert "no rule in effect ever gives anyone a token" in rule_problem(base, Rule("pot_ante"), samples)
+    assert "no rule in effect ever gives anyone a token" in rule_problem(base, Rule("spend_wild"), samples)
+    assert rule_problem(base + [Rule("token_on_face")], Rule("pot_ante"), samples) is None
+    # coded rules: taking from a space, reading spaces, a win condition on tokens
+    steal = code("effect", "def effect(ctx, fx):\n    if ctx.card.rank == 13:\n        fx.steal_to_hand(ctx.next_player, ctx.player)")
+    reads = code("restriction", "def applies(ctx):\n    return len(ctx.spaces[ctx.player]) > 0 and ctx.card.is_face")
+    rich = code("win", "def wins(ctx):\n    return ctx.tokens[ctx.player] >= 3 and len(ctx.hand) <= 2")
+    for rule, comp in ((steal, "spaces"), (reads, "spaces"), (rich, "tokens")):
+        assert missing_components(base, rule, samples) == [comp]
+    assert missing_components(base + [Rule("space_on_rank", {"r": 4})], steal, samples) == []
+    # a rule can bring in what it uses itself...
+    both = code("effect", "def effect(ctx, fx):\n    if ctx.card.rank == 4:\n        fx.to_space(ctx.player)\n"
+                          "    elif ctx.card.rank == 13:\n        fx.steal_to_hand(ctx.next_player, ctx.player)")
+    assert missing_components(base, both, samples) == []
+    # ...but a source that only works when tokens already exist is no source
+    gated = code("effect", "def effect(ctx, fx):\n    if ctx.card.is_face and ctx.tokens[ctx.player] > 0:\n"
+                           "        fx.gain_tokens(ctx.player, 1)")
+    assert components_available([gated], samples) == set()
+    assert missing_components(base, gated, samples) == ["tokens"]
+
+
+def test_library_never_draws_a_token_rule_without_a_token_source():
+    stack = [Rule("match_parity")]
+    for s in range(40):
+        rule = generate_rule(stack, random.Random(s), mechanics=True, effect_share=0.6)
+        assert rule.template not in ("pot_ante", "spend_wild")
