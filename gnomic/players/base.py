@@ -41,6 +41,7 @@ class Proposal:
 class Player:
     kind = "base"
     makes_rules = False  # can this player make up its own rules (--propose-rules)? Else it gets library rules.
+    live_updates = False  # is on_table_update called as the table changes (web players)?
 
     def __init__(self, name: str):
         self.name = name
@@ -68,4 +69,13 @@ class Player:
         pass
 
     def on_game_end(self, game: int, winner: int | None) -> None:
+        pass
+
+    def on_table_update(self, view: PlayerView, current: int | None) -> None:
+        """The public table changed (only called if live_updates). `current` is the seat about to
+        play (sent before the pacing delay), or None at the end of a game. Never asks for anything."""
+        pass
+
+    def on_match_end(self, log: tuple, scores: list[int], stopped: bool) -> None:
+        """The match is over. `log` is the full public log (PublicEvent), as players see it."""
         pass

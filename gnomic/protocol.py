@@ -102,12 +102,12 @@ Your goal is to win games. Bad plays cost you a card when someone calls them, an
 
 RULE4_ENGINE = (
     " 4. One player is the dealer. Before game 1 the dealer is secretly told rule R1. After each game the winner is "
-    "secretly told one new rule, which is added to the rules in effect. Everyone is told when a rule is added and who "
+    "secretly told one new rule and becomes the dealer of the next game. The rule is added to the rules in effect. Everyone is told when a rule is added and who "
     "owns it, but only its owner is told what it says. Rules carry over from game to game.\n")
 
 RULE4_PLAYERS = (
     " 4. One player is the dealer. Before game 1 the dealer makes up rule R1. After each game the winner makes up one "
-    "new rule, which is added to the rules in effect. The engine asks with MAKE A RULE (see below), turns the rule into "
+    "new rule and becomes the dealer of the next game. The rule is added to the rules in effect. The engine asks with MAKE A RULE (see below), turns the rule into "
     "code and checks that the game stays playable; if it can't use your rule it tells you why and asks for another, "
     "and if that keeps failing it gives you a rule instead. Everyone is told when a rule is added and who owns it, but "
     "only its owner knows what it says. Rules carry over from game to game.\n")

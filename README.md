@@ -14,7 +14,7 @@ keeps changing under the players' feet.
 - A standard 52-card deck. Each player is dealt 7 cards, and one card starts the DISCARD pile.
 - On your turn you play one card from your hand onto DISCARD. First to empty their hand wins.
 - **Hidden rules** decide which plays are legal. Before game 1 a randomly chosen dealer is
-  secretly given rule R1. After each game the winner gets one new secret rule. Everyone is told
+  secretly given rule R1. After each game the winner gets one new secret rule and becomes the dealer. Everyone is told
   that a rule was added and who owns it, but only the owner knows what it says.
 - **Players police their own rules.** After every play, each rule owner may call
   `PENALTY R<n>`, naming one of their own rules. If the play broke that rule the offender draws
@@ -83,6 +83,7 @@ Give one `-p` per seat. Each spec is either a baseline or `<provider>:<model>[?o
 | `stats` | Learns which card features get penalized, and knows its own rules: the bar an LLM should clear |
 | `oracle` | Knows every rule and always plays legally when it can: the upper bound |
 | `human` | You, in the terminal, seeing exactly the messages an LLM gets |
+| `web` | You, in the browser: the same messages and choices as an LLM, drawn as a table with clickable cards |
 | `anthropic:<model>` | Anthropic API (`ANTHROPIC_API_KEY`) |
 | `openai:<model>` | OpenAI Chat Completions (`OPENAI_API_KEY`), or any OpenAI-compatible server via `base_url=` |
 | `gemini:<model>` | Gemini on Google Cloud Vertex AI (`GMAU_GEMINI_PROJECT`, Application Default Credentials) |
@@ -138,6 +139,20 @@ play. It also shows the calls and their outcomes, any effects, and each model's 
 thinking summary and notes. It can pause, resume, stop and change the pace. The UI is for
 humans and shows everything, hidden rules included.
 
+## Playing in the browser
+
+Seat yourself with `-p web` (add `?name=You` to name the seat):
+
+```bash
+gnomic play -p 'web?name=Ann' -p anthropic:claude-opus-5-5 -p stats --games 3 --open
+```
+
+The command prints a private link for each `web` seat. The player page gets the same messages
+an LLM player gets (your turn, every play while you own a rule, MAKE A RULE) and also follows
+the table live as the other players take their turns. Pick cards, options and calls with the mouse, keep private notes, or type the reply in the
+LLM's format. With a `web` seat the spectator UI (which shows every hidden rule) is served only
+with `--ui`, at a separate link with a key, so keep it away from the players.
+
 ## Cost
 
 Every play costs one LLM call per LLM player: the player, plus each rule owner judging it.
@@ -159,7 +174,7 @@ A 4-LLM game of about 80 turns makes roughly 320 calls. Judging calls run in par
 | `gnomic/coder.py`, `gnomic/sandbox.py` | Coding agent for proposed rules, and the restricted interpreter |
 | `gnomic/protocol.py` | The text protocol between engine and LLMs |
 | `gnomic/providers.py`, `gnomic/players/` | Provider sessions, LLM and baseline players |
-| `gnomic/server.py`, `gnomic/static/` | Spectator UI |
+| `gnomic/server.py`, `gnomic/static/` | Spectator UI and the player page |
 
 [`CLAUDE.md`](CLAUDE.md) records every design decision in detail.
 

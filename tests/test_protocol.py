@@ -69,7 +69,8 @@ def test_llm_players_full_match_with_private_notes(monkeypatch):
         if p.name not in owners:
             assert not any(e["kind"] == "call" for e in p.reasoning_log)
             assert not any(msg.splitlines()[-1].startswith("JUDGE") for msg in FakeSession.transcripts[p.session.model])
-    assert any(e["kind"] == "call" for e in m.players[m.dealer].reasoning_log)
+    first_dealer = next(p for p in m.players if p.name == m.stack.entries[0].owner)  # owns R1
+    assert any(e["kind"] == "call" for e in first_dealer.reasoning_log)
     # The first message carries the full public log; one player's notes never reach another player.
     first = FakeSession.transcripts["alpha"][0]
     assert "RULE R1 ADDED" in first and "G1 START" in first
@@ -77,8 +78,8 @@ def test_llm_players_full_match_with_private_notes(monkeypatch):
         for other in FakeSession.transcripts:
             if other != me:
                 assert not any(f"SECRET-{other}-" in msg for msg in msgs)
-    # Only the dealer is shown the text of R1.
-    dealer = m.players[m.dealer].session.model
+    # Only game 1's dealer is shown the text of R1.
+    dealer = first_dealer.session.model
     for name, msgs in FakeSession.transcripts.items():
         shown = any("YOUR RULES (secret): R1:" in msg for msg in msgs)
         assert shown == (name == dealer)

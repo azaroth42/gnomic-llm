@@ -1,8 +1,10 @@
 """A match: a series of games under a growing stack of hidden rules.
 
 Before game 1 a randomly chosen dealer (a seated player) is secretly given rule
-R1. After each game the winner is secretly given one more rule. A game with no
-winner (round limit reached: every player has played `max_rounds` cards) adds no rule.
+R1. After each game the winner is secretly given one more rule and becomes the
+dealer. A game with no winner (round limit reached: every player has played
+`max_rounds` cards) adds no rule and keeps the dealer. Each game starts with the
+seat after the dealer.
 """
 
 from __future__ import annotations
@@ -126,7 +128,7 @@ class Match:
         try:
             for g in range(cfg.num_games):
                 game = Game(g, cfg.num_games, self.players, self.stack, self.log, self.scores, self.rng,
-                            starting_player=(self.dealer + 1 + g) % n, emit=self.emit,
+                            starting_player=(self.dealer + 1) % n, dealer=self.dealer, emit=self.emit,
                             controls=self.controls, hand_size=cfg.hand_size, max_rounds=cfg.max_rounds,
                             players_make_rules=cfg.propose_rules,
                             mechanics=self.mechanics_in(g), mechanics_from=self._mechanics_from(),
@@ -136,12 +138,15 @@ class Match:
                 self.results.append(result)
                 if result.winner is not None:
                     self.scores[result.winner] += 1
+                    self.dealer = result.winner     # the winner deals the next game
                     if g < cfg.num_games - 1:
                         self._add_rule(result.winner, g)
         except StopMatch:
             stopped = True
         summary = summarize(self.players, self.results, self.scores)
         summary["stopped"] = stopped
+        for p in self.players:
+            p.on_match_end(tuple(self.log.events), list(self.scores), stopped)
         summary["rules"] = [e.to_json() for e in self.stack.entries]
         self.emit("match_end", summary=summary)
         return summary

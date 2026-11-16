@@ -253,10 +253,10 @@ function apply(ev) {
       S.log.push({ sys: true, text: `No rule added for ${ev.owner}: ${ev.reason}` });
       break;
     case "game_start":
-      S.game = ev.game; S.turn = 0; S.discard = [ev.top]; S.deck = ev.deck_size; S.hands = ev.hands;
+      S.game = ev.game; S.turn = 0; if (ev.dealer != null) S.dealer = ev.dealer; S.discard = [ev.top]; S.deck = ev.deck_size; S.hands = ev.hands;
       S.handSizes = S.players.map((p) => (ev.hands[p.name] || []).length);
       S.status = {}; S.lastPlay = null; S.current = null; S.marks = {}; S.round = 0; S.table = ev.table || null;
-      S.log.push({ sys: true, text: `Game ${ev.game + 1} starts. First player ${P(ev.starting_player)}. DISCARD starts with ${ev.top}. Rules in effect: ${ev.num_rules}.${ev.mechanics ? " Table mechanics are on." : ""}` });
+      S.log.push({ sys: true, text: `Game ${ev.game + 1} starts. ${ev.dealer != null ? `Dealer ${P(ev.dealer)}. ` : ""}First player ${P(ev.starting_player)}. DISCARD starts with ${ev.top}. Rules in effect: ${ev.num_rules}.${ev.mechanics ? " Table mechanics are on." : ""}` });
       break;
     case "turn_start":
       S.turn = ev.turn; S.current = ev.seat; S.hands[ev.player] = ev.hand;
@@ -549,7 +549,7 @@ setInterval(() => {
 // ---------------------------------------------------------------- wiring
 
 function connect() {
-  const es = new EventSource("/events");
+  const es = new EventSource("/events" + location.search);
   es.onopen = () => $("conn").classList.add("on");
   es.onerror = () => { $("conn").classList.remove("on"); caughtUp = false; };
   es.onmessage = (m) => {
@@ -566,7 +566,7 @@ $("tabs").addEventListener("click", (e) => {
 });
 $("showHands").addEventListener("change", () => { dirty = true; });
 async function control(body) {
-  try { await fetch("/api/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+  try { await fetch("/api/control" + location.search, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
   catch (e) { console.warn(e); }
 }
 $("pause").addEventListener("click", () => control({ action: S.controls.paused ? "resume" : "pause" }));

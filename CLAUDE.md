@@ -14,12 +14,13 @@ uv venv && uv pip install -e '.[all,dev]'       # extras: anthropic, openai, gem
 gnomic play -p anthropic:claude-opus-5-5 -p openai:gpt-5 -p gemini:gemini-3-pro -p stats --games 5 --ui --open
 gnomic play -p oracle -p stats -p random --games 10 --seed 1     # baselines only, no API cost
 gnomic play -p mtplx -p oracle -p stats --games 3 --ui --open    # local MTPLX model, no API cost
+gnomic play -p 'web?name=Ann' -p oracle -p stats --games 3 --open  # play in the browser (prints your page's URL)
 gnomic replay logs/match-YYYYmmdd-HHMMSS.jsonl --open           # watch a finished match
 gnomic play -p anthropic:claude-opus-5-5 -p stats --propose-rules --coder anthropic:claude-opus-5-5
 gnomic rules                                                    # list the rule library
 ```
 
-Player specs: `random | stats | oracle | human | <provider>:<model>[?opt=val&...]`, where
+Player specs: `random | stats | oracle | human | web | <provider>:<model>[?opt=val&...]`, where
 provider is `anthropic`, `openai`, `gemini`, `litellm` or `mtplx`. `mtplx` needs no model:
 it uses whatever the local server has loaded. Every spec accepts `name=`.
 Provider options: `effort` (Anthropic/OpenAI/LiteLLM), `thinking=off` (Anthropic, for
@@ -84,14 +85,16 @@ Clarifications and decisions (all made by the user unless marked *default*):
 - **Round limit (user decision):** a game ends after 20 rounds (every player has played 20 cards;
   `--max-rounds`). Hitting it means no winner and no new rule. Players are told the limit and
   STATE shows `round r/20`.
-- **Dealer:** a seated player chosen at random (or `--dealer`). The dealer plays like anyone else.
+- **Dealer:** game 1's dealer is a seated player chosen at random (or `--dealer`). **The winner of
+  each game deals the next one** (user decision); after a game with no winner the dealer stays.
+  The dealer plays like anyone else.
 - **Rule growth:** before game 1 the dealer is secretly given R1. After each game the
   **winner** is secretly given one new rule (classic Mao). Rules carry over between games.
   Everyone is told when a rule is added and who owns it; only the owner is told its text,
   which is shown in their STATE as `YOUR RULES (secret)`.
 - **The first rule is always a restriction** (it makes some plays penalties). A permission as
   R1 would do nothing, and the dealer would win game 1 trivially.
-- Turn order is seat order. Game *g* starts with seat `(dealer + 1 + g) % n` (*default*).
+- Turn order is seat order. Each game starts with the seat after its dealer, `(dealer + 1) % n` (*default*).
 
 ## Hidden rules (`gnomic/rules.py`)
 
@@ -308,7 +311,41 @@ Clarifications and decisions (all made by the user unless marked *default*):
   avoids and calls, ignoring newer rules it doesn't own; the bar an LLM should clear), `oracle`
   (knows every rule, plays legally when possible, calls exactly the breaks of its own rules,
   self-calls; upper bound),
-  `human` (terminal, sees exactly the LLM messages).
+  `human` (terminal, sees exactly the LLM messages), `web` (a human in the browser; see below).
+
+## Human players in the browser (`players/web.py`, `static/play.html`; spec `web`)
+
+- **User decision:** a human seat in a web UI with all the same possibilities and interactions as an
+  LLM player. `WebHumanPlayer` has the same request/reply cycle as `LLMPlayer`: the same messages
+  (built with `render_message`, `turn_request`, `judge_request`, `rule_request`), the same reply
+  format, the same parsers (`parse_play` / `parse_call` / `parse_rule`), the same `INVALID:` retry
+  texts and the same retry limit (`max_retries_turn`, default 2), after which the engine plays a
+  random card or counts the call as NONE. NOTES are kept and sent with every reply, and spectators
+  see them as they see an LLM's.
+- **Same information, shown live** (user decision): the engine asks the human to act at the same
+  moments as an LLM (YOUR TURN, JUDGE while they own a rule, MAKE A RULE), but the page also follows
+  the table in real time. An LLM would get the same public information in its next message, and
+  LLMs play in seconds anyway, so this gives the human no real advantage. `Game._notify` calls
+  `Player.on_table_update(view, current)` for players with `live_updates` (only `web`) before
+  every turn, ahead of the pacing delay (so right after the previous play, saying who's next),
+  and at the end of each game. Each update is built from that player's own `view_for`. The page
+  shows each request's message text verbatim (Engine message tab: EVENTS since the last
+  *request*, exactly what an LLM gets), the system prompt (Rules of the match tab), and draws the
+  same `PlayerView` as cards and buttons (`view_json`). Seats only, never names. The match-end
+  notice (`Player.on_match_end`) sends the last public events and the scores; it reveals no rule text.
+- **Replies:** the page builds the reply text from clicks (cards in order for multi-card moves,
+  ANGLE / SPEND / TARGET / DECLARE / GIVE from game 3, NONE / PENALTY R<n>, RULE text), with a
+  live preview. "Edit the reply as text" lets the human type the reply as an LLM would.
+- **Transport:** each `web` player has a private outbox (`EventBus`, no log file) and a secret
+  token. `GET /play/<token>` (page), `/play/<token>/events` (SSE replay + live), and
+  `POST /play/<token>/reply {id, text}` (409 if that request is no longer open).
+- **Spectator view with humans seated** (*default*): `gnomic play` starts the server whenever a
+  `web` seat exists and prints each player's URL. The spectator view is then served only with
+  `--ui`, and only at `/?key=<random key>` (403 otherwise), because it shows every hidden rule
+  and hand. `--open` opens the player pages too.
+- **Stopping:** a waiting web player polls the match's stop flag (`should_stop`) and raises
+  `StopMatch`. `Game` now re-raises `StopMatch` from `choose`/`call` instead of treating it as a
+  crashing player.
 
 ## Metrics (`match.summarize`, also in `<log>.summary.json`)
 
@@ -345,11 +382,11 @@ gnomic/game.py        Game loop (play → calls → resolution), PublicLog, Play
 gnomic/match.py       Match (dealer, rule growth, scoring), summarize()
 gnomic/protocol.py    System prompt, event/state rendering, reply parsing
 gnomic/providers.py   Anthropic / OpenAI / Gemini / LiteLLM chat sessions
-gnomic/players/       base (Choice, Call, Player), llm, baselines, human, factory (spec strings)
+gnomic/players/       base (Choice, Call, Player), llm, baselines, human (terminal), web (browser), factory (spec strings)
 gnomic/events.py      EventBus → JSONL log + live subscribers
-gnomic/server.py      Spectator HTTP/SSE server
+gnomic/server.py      HTTP/SSE server: spectator UI (static/index.html) and player pages (static/play.html)
 gnomic/cli.py         `gnomic play | replay | rules`
-tests/                engine, protocol (fake LLM sessions), server, propose (sandbox, coder, fakes), mechanics
+tests/                engine, protocol (fake LLM sessions), server, propose (sandbox, coder, fakes), mechanics, web
 ```
 
 ## Cost and known limits
@@ -359,5 +396,5 @@ tests/                engine, protocol (fake LLM sessions), server, propose (san
 - Hosted providers (Anthropic, OpenAI, Gemini, LiteLLM) have not been exercised live (no API
   keys in the dev environment); the protocol is tested with fake sessions. MTPLX has been run live.
 - Ideas not built yet: a cheaper effort level for JUDGE requests;
-  running several matches concurrently; a human seat in the web UI; OpenAI Responses API for
+  running several matches concurrently; OpenAI Responses API for
   reasoning summaries.

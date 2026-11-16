@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gnomic Mau — player</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<!--
+  The page for a human player (players/web.py). Everything shown here comes from this player's
+  own outbox: the same messages an LLM player gets, a structured copy of the same view, and live
+  updates of the public table as other players take their turns.
+  Replies are written in the LLM reply format and parsed by the same code on the server.
+-->
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e3e1da;
+    --accent: #2f6fde; --accent-soft: #e5eefc; --good: #1f8a4c; --good-soft: #e3f4ea;
+    --bad: #c4392f; --bad-soft: #fbe7e5; --warn: #b26a00; --warn-soft: #fdf0dc;
+    --red-suit: #c4392f; --black-suit: #1d1d1f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151517; --panel: #1f1f22; --ink: #ececef; --muted: #9a9aa2; --line: #2e2e33;
+      --accent: #6c9cff; --accent-soft: #1d2a44; --good: #4cc483; --good-soft: #17301f;
+      --bad: #ff6b5e; --bad-soft: #3a1c1a; --warn: #f0a742; --warn-soft: #3a2c14;
+      --red-suit: #ff6b5e; --black-suit: #ececef;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px; background: var(--panel);
+           border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; }
+  header .me { font-weight: 700; color: var(--accent); }
+  header .where { color: var(--muted); font-variant-numeric: tabular-nums; }
+  header .spacer { flex: 1; }
+  .conn { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); display: inline-block; }
+  .conn.on { background: var(--good); }
+  button { font: inherit; padding: 5px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  input, select, textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+                            border-radius: 6px; padding: 4px 6px; }
+  textarea { width: 100%; resize: vertical; }
+  .mono, pre { font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre { white-space: pre-wrap; margin: 0; }
+
+  main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; padding: 14px 18px; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  .panel + .panel { margin-top: 14px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .muted { color: var(--muted); }
+
+  .card { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 40px;
+          padding: 0 4px; border-radius: 5px; border: 1px solid var(--line); background: var(--panel);
+          font-weight: 700; font-size: 14px; position: relative; }
+  .card.r { color: var(--red-suit); } .card.b { color: var(--black-suit); }
+  .card.lg { min-width: 48px; height: 66px; font-size: 20px; border-width: 2px; }
+  .card.sm { min-width: 26px; height: 30px; font-size: 12px; }
+  .card .ang { position: absolute; bottom: -15px; left: 0; right: 0; text-align: center; font-size: 10px;
+               color: var(--muted); font-weight: 400; }
+  .card.top { border-color: var(--ink); border-width: 2px; }
+  .card.pending { border: 2px dashed var(--warn); background: var(--warn-soft); }
+  .pile { display: flex; flex-wrap: wrap; gap: 4px 3px; align-items: flex-end; padding-bottom: 14px; }
+  .hand { display: flex; flex-wrap: wrap; gap: 6px; }
+  .hand .card { cursor: default; }
+  .hand.pick .card { cursor: pointer; }
+  .hand.pick .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .hand .card.sel { border-color: var(--accent); background: var(--accent-soft); transform: translateY(-6px);
+                    box-shadow: 0 0 0 3px var(--accent-soft); }
+  .hand .card .ord { position: absolute; top: -8px; right: -8px; background: var(--accent); color: #fff;
+                     border-radius: 9px; font-size: 11px; min-width: 17px; height: 17px; line-height: 17px; text-align: center; }
+
+  .seats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .seat { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+  .seat.me { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .seat.acting { border-color: var(--warn); border-style: dashed; }
+  .seat .lab { font-weight: 700; }
+  .seat .meta { color: var(--muted); font-size: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .badge.muted { background: var(--line); color: var(--muted); }
+  .row { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+  .kv { margin-top: 6px; }
+  .kv b { font-weight: 600; }
+  .rules li { margin: 2px 0; }
+
+  #action.open { border: 2px solid var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  #action.judge.open { border-color: var(--warn); box-shadow: 0 0 0 4px var(--warn-soft); }
+  .status { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+  .status .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: currentColor;
+                 margin-right: 7px; animation: pulse 1s infinite; vertical-align: 1px; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .request { background: var(--bg); border-radius: 6px; padding: 6px 8px; margin: 6px 0 10px; }
+  .invalid { background: var(--bad-soft); color: var(--bad); border-radius: 6px; padding: 6px 8px; margin: 8px 0; }
+  .notice { background: var(--warn-soft); color: var(--warn); border-radius: 6px; padding: 6px 8px; margin: 8px 0; }
+  .field { margin: 10px 0; }
+  .field > label.t { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .05em; }
+  .opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .opts label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 3px; }
+  .calls { display: flex; flex-wrap: wrap; gap: 8px; }
+  .calls label { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 6px;
+                 padding: 5px 10px; cursor: pointer; }
+  .calls label.on { border-color: var(--accent); background: var(--accent-soft); }
+  .calls label.pen.on { border-color: var(--bad); background: var(--bad-soft); color: var(--bad); }
+  .send { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+  .tabs button { padding: 3px 10px; font-size: 13px; }
+  .tabs button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  #log { max-height: 62vh; overflow: auto; }
+  #log div { padding: 2px 0; border-bottom: 1px solid var(--line); }
+  #log .private { color: var(--warn); }
+  #log .mine { color: var(--accent); }
+  #log .sys { color: var(--muted); font-style: italic; }
+  .scroll { max-height: 62vh; overflow: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Gnomic Mau</h1>
+  <span class="me" id="me">connecting…</span>
+  <span class="where" id="where"></span>
+  <span class="spacer"></span>
+  <span class="muted" id="connText">offline</span><span class="conn" id="conn"></span>
+</header>
+
+<main>
+  <div>
+    <div class="panel" id="action"></div>
+    <div class="panel" id="table"></div>
+  </div>
+  <div>
+    <div class="panel">
+      <div class="tabs" id="tabs">
+        <button data-tab="log" class="on">Log</button>
+        <button data-tab="message">Engine message</button>
+        <button data-tab="briefing">Rules of the match</button>
+        <button data-tab="help">How to play here</button>
+      </div>
+      <div id="tab-log"><div id="log" class="mono"></div></div>
+      <div id="tab-message" hidden><div class="scroll"><pre id="message" class="muted">No message yet.</pre></div></div>
+      <div id="tab-briefing" hidden><div class="scroll"><pre id="briefing" class="muted">The engine sends the rules with its first message.</pre></div></div>
+      <div id="tab-help" hidden><div class="scroll">
+        <p>You see exactly what an LLM player sees: the <b>Engine message</b> tab is the message an LLM would get, and
+          <b>Rules of the match</b> is its briefing. The rest of the page draws the same information.</p>
+        <p>The table and the log follow the game live. The engine asks you to act on your turn and, while you own a
+          rule, after every other player's play so you can judge it.</p>
+        <p>Your reply is built from your choices in the reply format the engine expects. Tick <i>Edit the reply as
+          text</i> to type it yourself. A reply the engine can't use gets an <b>INVALID</b> message; after the same
+          number of retries an LLM gets, the engine plays a random card for you or counts your call as NONE.</p>
+        <p><b>Notes</b> are your private notes, as an LLM keeps them. They are sent with every reply. Nobody at the
+          table sees them; spectators of the match do.</p>
+        <p>Keys: <span class="mono">Ctrl/⌘+Enter</span> sends.</p>
+      </div></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const SUIT = { S: "♠", H: "♥", D: "♦", C: "♣" };
+const P = (s) => `P${s + 1}`;
+
+function cardHTML(code, cls = "", angle = 0, extra = "") {
+  const suit = code.slice(-1), rank = code.slice(0, -1);
+  const color = suit === "H" || suit === "D" ? "r" : "b";
+  const ang = angle ? `<span class="ang">@${angle}</span>` : "";
+  return `<span class="card ${cls} ${color}" data-card="${esc(code)}" title="${esc(code)}${angle ? "@" + angle : ""}">${esc(rank)}${SUIT[suit] || esc(suit)}${ang}${extra}</span>`;
+}
+
+// ---- state ------------------------------------------------------------------
+let S, F;
+function reset() {
+  S = { intro: null, log: [], req: null, view: null, invalid: null, sending: false, sendError: null,
+        lastDone: null, matchEnd: null, message: null, notes: null, caughtUp: false,
+        current: null, currentSince: null };
+  resetForm();
+}
+function resetForm() {
+  F = { sel: [], angle: 0, spend: 0, target: "", declare: "", give: "", call: null, rule: "", editRaw: false, raw: "" };
+}
+reset();
+
+function handle(ev) {
+  switch (ev.type) {
+    case "hello": reset(); S.skew = ev.server_now * 1000 - Date.now(); break;
+    case "caught_up": S.caughtUp = true; break;
+    case "intro":
+      S.intro = ev;
+      $("briefing").textContent = ev.system_prompt; $("briefing").classList.remove("muted");
+      break;
+    case "update":
+      for (const line of ev.events) S.log.push({ cls: "", text: line });
+      for (const line of ev.private) S.log.push({ cls: "private", text: "PRIVATE " + line });
+      if (!S.req) S.view = ev.view;
+      if (ev.current !== S.current || ev.current == null) S.currentSince = ev.ts * 1000;
+      S.current = ev.current;
+      break;
+    case "request": {
+      for (const line of ev.events) S.log.push({ cls: "", text: line });
+      for (const line of ev.private) S.log.push({ cls: "private", text: "PRIVATE " + line });
+      S.req = ev; S.view = ev.view; S.current = null; S.invalid = null; S.lastDone = null; S.sendError = null; S.message = ev.message;
+      if (ev.notes != null) S.notes = ev.notes;
+      resetForm();
+      break;
+    }
+    case "invalid":
+      if (S.req && S.req.id === ev.id) { S.invalid = ev; S.message = ev.message; }
+      break;
+    case "done":
+      if (S.req && S.req.id === ev.id) {
+        const r = S.req, what = r.kind === "judge" ? `You judged ${r.pending.label}'s ${r.pending.public}`
+          : r.kind === "play" ? "Your turn" : "Your rule";
+        S.log.push({ cls: "mine", text: ev.accepted ? `${what}: ${replyLines(ev.reply || "")}`
+                                                    : `${what}: no usable reply, so ${ev.fallback}` });
+        S.lastDone = ev; S.req = null; S.invalid = null;
+        if (ev.notes != null) S.notes = ev.notes;
+      }
+      break;
+    case "match_end":
+      for (const line of ev.events) S.log.push({ cls: "", text: line });
+      S.log.push({ cls: "sys", text: ev.stopped ? "The match was stopped." : "The match is over." });
+      S.matchEnd = ev; S.req = null;
+      break;
+  }
+}
+
+// The part of a reply after NOTES, on one line, for the log.
+function replyLines(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const i = lines.findIndex((l) => /^(PLAY|CALL|RULE|ANGLE|SPEND|TARGET|DECLARE|GIVE)\s*:/i.test(l));
+  return (i < 0 ? lines.slice(-1) : lines.slice(i)).join(" / ");
+}
+
+// ---- composing a reply -------------------------------------------------------
+function compose() {
+  const r = S.req, v = S.view, L = [];
+  const notes = ($("notes")?.value ?? S.notes ?? "").trim();
+  if (notes) L.push("NOTES:", notes);
+  if (r.kind === "play") {
+    L.push("PLAY: " + (F.sel.join(" ") || "<choose a card>"));
+    if (v.mechanics) {
+      if (+F.angle) L.push(`ANGLE: ${F.angle}`);
+      if (+F.spend) L.push(`SPEND: ${F.spend}`);
+      if (F.target !== "") L.push(`TARGET: ${P(+F.target)}`);
+      if (F.declare.trim()) L.push(`DECLARE: ${F.declare.trim()}`);
+      if (F.give) L.push(`GIVE: ${F.give}`);
+    }
+    if (v.can_call) L.push("CALL: " + (F.call ? `PENALTY R${F.call}` : "NONE"));
+  } else if (r.kind === "judge") {
+    L.push("CALL: " + (F.call ? `PENALTY R${F.call}` : "NONE"));
+  } else if (r.kind === "rule") {
+    L.push("RULE: " + (F.rule.trim() || "<your rule>"));
+  }
+  return L.join("\n");
+}
+
+function ready() {
+  if (!S.req || S.sending) return false;
+  if (F.editRaw) return F.raw.trim().length > 0;
+  if (S.req.kind === "play") return F.sel.length > 0;
+  if (S.req.kind === "rule") return F.rule.trim().length > 0;
+  return true;
+}
+
+async function send() {
+  if (!ready()) return;
+  const text = F.editRaw ? F.raw : compose();
+  S.sending = true; S.sendError = null; render();
+  try {
+    const res = await fetch(location.pathname.replace(/\/$/, "") + "/reply", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: S.req.id, text }) });
+    const body = await res.json();
+    if (!body.ok) S.sendError = body.error;
+  } catch (e) { S.sendError = String(e); }
+  S.sending = false; render();
+}
+
+// ---- rendering -----------------------------------------------------------------
+function render() {
+  const v = S.view, me = S.intro ? S.intro.label : null;
+  $("me").textContent = me ? `You are ${me}` : "Waiting for the engine's first message";
+  $("where").textContent = !v ? "" : v.table
+    ? `G${v.game + 1}/${v.num_games} · T${v.turn + 1} · round ${Math.min(v.round, v.max_rounds)}/${v.max_rounds} · rules in effect: ${v.num_rules}`
+    : `between games · rules in effect: ${v.num_rules}`;
+  document.title = (S.req ? "● Your move — " : "") + "Gnomic Mau" + (me ? ` (${me})` : "");
+  renderAction();
+  renderTable();
+  renderLog();
+  $("message").textContent = S.message || "No message yet.";
+  $("message").classList.toggle("muted", !S.message);
+}
+
+function renderAction() {
+  const box = $("action"), r = S.req, v = S.view;
+  box.className = "panel" + (r ? " open " + r.kind : "");
+  // Keep focus and typing in text fields across re-renders.
+  const active = document.activeElement?.id, caret = document.activeElement?.selectionStart;
+  const notesVal = $("notes") ? $("notes").value : (S.notes || "");
+  if (!r) {
+    let html;
+    if (S.matchEnd) {
+      const n = S.matchEnd.scores.length;
+      html = `<div class="status">${S.matchEnd.stopped ? "Match stopped" : "Match over"}</div>
+        <div>Wins: ${S.matchEnd.scores.map((w, i) => `${P(i)}=${w}${S.intro && i === S.intro.seat ? " (you)" : ""}`).join(" · ")}</div>`;
+    } else {
+      const cur = S.current, mine = S.intro && cur === S.intro.seat;
+      html = cur != null && !mine
+        ? `<div class="status" style="color:var(--muted)"><span class="dot"></span>${P(cur)} is playing <span id="elapsed"></span></div>`
+        : mine ? `<div class="status" style="color:var(--accent)">You play next…</div>`
+        : `<div class="status muted">${S.intro ? "Waiting…" : "Waiting for the game to start…"}</div>`;
+      html += `<div class="muted">You'll be asked to act on your turn and, while you own a rule, after every play so you can judge it.</div>`;
+    }
+    if (S.lastDone && !S.lastDone.accepted)
+      html += `<div class="invalid">Your last reply couldn't be used (${esc(S.lastDone.error || "")}), so ${esc(S.lastDone.fallback)}.</div>`;
+    if (S.view && S.view.table && S.view.hand)
+      html += `<div class="field"><label class="t">Your hand</label><div class="hand">${S.view.hand.map((c) => cardHTML(c)).join("")}</div></div>`;
+    box.innerHTML = html;
+    return;
+  }
+
+  let title;
+  if (r.kind === "play") title = `<span class="dot"></span>Your turn`;
+  else if (r.kind === "judge") title = `<span class="dot"></span>Judge: ${esc(r.pending.label)} plays ${esc(r.pending.public)}${r.pending.top_before ? " on " + esc(r.pending.top_before) : ""}`;
+  else title = `<span class="dot"></span>Make a rule`;
+
+  let html = `<div class="status" style="color:var(${r.kind === "judge" ? "--warn" : "--accent"})">${title}</div>
+    <pre class="request">${esc(r.request)}</pre>`;
+  if (S.invalid) html += `<pre class="invalid">${esc(S.invalid.message)}\n(${S.invalid.retries_left} more ${S.invalid.retries_left === 1 ? "try" : "tries"} before the engine decides for you)</pre>`;
+
+  if (r.kind === "play" || r.kind === "judge") {
+    const pick = r.kind === "play" && !F.editRaw;
+    html += `<div class="field"><label class="t">Your hand${pick ? (v.mechanics ? " — click cards to play, in order (the last ends on top)" : " — click the card to play") : ""}</label>
+      <div class="hand ${pick ? "pick" : ""}" id="hand">${v.hand.map((c) => {
+        const k = F.sel.indexOf(c);
+        return cardHTML(c, "lg" + (k >= 0 ? " sel" : ""), 0, k >= 0 && v.mechanics ? `<span class="ord">${k + 1}</span>` : "");
+      }).join("")}</div></div>`;
+  }
+  if (r.kind === "play" && v.mechanics && !F.editRaw) {
+    const others = [...Array(v.players).keys()].filter((s) => s !== v.seat);
+    html += `<div class="field"><label class="t">Options (they do nothing unless a rule makes them matter)</label><div class="opts">
+      <label>ANGLE<select id="o-angle">${v.angles.map((a) => `<option ${+F.angle === a ? "selected" : ""}>${a}</option>`).join("")}</select></label>
+      <label>SPEND (you have ${v.my_tokens})<input id="o-spend" type="number" min="0" max="${v.my_tokens}" value="${esc(F.spend)}" ${v.my_tokens ? "" : "disabled"}></label>
+      <label>TARGET<select id="o-target"><option value="">(none)</option>${others.map((s) => `<option value="${s}" ${String(F.target) === String(s) ? "selected" : ""}>${P(s)}</option>`).join("")}</select></label>
+      <label>DECLARE (≤${v.max_declare} chars)<input id="o-declare" maxlength="${v.max_declare}" value="${esc(F.declare)}"></label>
+      <label>GIVE (if your play makes you trade)<select id="o-give"><option value="">(none)</option>${v.hand.filter((c) => !F.sel.includes(c)).map((c) => `<option ${F.give === c ? "selected" : ""}>${c}</option>`).join("")}</select></label>
+    </div></div>`;
+  }
+  if ((r.kind === "judge" || (r.kind === "play" && v.can_call)) && !F.editRaw) {
+    const what = r.kind === "play" ? "Your call on your own play (if it breaks one of your rules you must call it)" : "Your call";
+    html += `<div class="field"><label class="t">${what}</label><div class="calls">
+      <label class="${F.call == null ? "on" : ""}"><input type="radio" name="call" value="" ${F.call == null ? "checked" : ""}>NONE</label>
+      ${v.my_rules.map(([n, text]) => `<label class="pen ${F.call === n ? "on" : ""}" title="${esc(text)}"><input type="radio" name="call" value="${n}" ${F.call === n ? "checked" : ""}>PENALTY R${n}</label>`).join("")}
+    </div></div>`;
+  } else if (r.kind === "play" && !v.can_call && !F.editRaw) {
+    html += `<div class="muted">You own no rules, so you can't call and need no CALL line.</div>`;
+  }
+  if (r.kind === "rule" && !F.editRaw) {
+    html += `<div class="field"><label class="t">Your rule (one or two precise sentences)</label>
+      <textarea id="rule" rows="3" maxlength="600">${esc(F.rule)}</textarea></div>`;
+  }
+  html += `<div class="field"><label class="t">Notes (private; sent with every reply)</label>
+    <textarea id="notes" rows="5" placeholder="Your hypotheses about the hidden rules, and the evidence for and against each.">${esc(notesVal)}</textarea></div>`;
+  html += `<div class="field"><label class="t"><input type="checkbox" id="editRaw" ${F.editRaw ? "checked" : ""}> Edit the reply as text</label>
+    ${F.editRaw ? `<textarea id="raw" rows="8" class="mono">${esc(F.raw)}</textarea>` : `<pre class="request" id="preview">${esc(compose())}</pre>`}</div>`;
+  html += `<div class="send"><button class="primary" id="sendBtn" ${ready() ? "" : "disabled"}>${S.sending ? "Sending…" : "Send reply"}</button>
+    <span class="muted">Ctrl/⌘+Enter</span>${S.sendError ? `<span style="color:var(--bad)">${esc(S.sendError)}</span>` : ""}</div>`;
+  box.innerHTML = html;
+
+  if (active && $(active)) {
+    $(active).focus();
+    if (caret != null && $(active).setSelectionRange) try { $(active).setSelectionRange(caret, caret); } catch (e) {}
+  }
+}
+
+function renderTable() {
+  const box = $("table"), v = S.view;
+  if (!v) { box.innerHTML = `<h2>Table</h2><div class="muted">Nothing yet.</div>`; return; }
+  const rules = v.my_rules.length
+    ? `<div class="kv"><b>Your rules (secret)</b><ul class="rules">${v.my_rules.map(([n, t]) => `<li><b>R${n}</b>: ${esc(t)}</li>`).join("")}</ul></div>`
+    : `<div class="kv muted">You own no rules, so you can't call penalties.</div>`;
+  if (!v.table) {
+    box.innerHTML = `<h2>Between games</h2>
+      <div class="kv">Wins: ${v.scores.map((w, i) => `${P(i)}=${w}${i === v.seat ? " (you)" : ""}`).join(" · ")}</div>${rules}`;
+    return;
+  }
+  const m = v.mech, acting = S.req ? (S.req.kind === "judge" ? S.req.pending.seat : S.req.kind === "play" ? v.seat : null)
+                                    : S.current;
+  const seats = [...Array(v.players).keys()].map((s) => {
+    const judge = v.judges.includes(s);
+    const space = m && m.spaces[s].length ? `<div class="pile" style="padding-bottom:12px">${m.spaces[s].map(([c, a]) => cardHTML(c, "sm", a)).join("")}</div>` : "";
+    return `<div class="seat ${s === v.seat ? "me" : ""} ${s === acting ? "acting" : ""}">
+      <div><span class="lab">${P(s)}</span>${s === v.seat ? " (you)" : ""}
+        ${judge ? '<span class="badge warn" title="owns a rule, so may call penalties">judge</span>' : ""}</div>
+      <div class="meta"><span>hand <b>${v.hand_sizes[s]}</b></span><span>wins <b>${v.scores[s]}</b></span>
+        ${m ? `<span>tokens <b>${m.tokens[s]}</b>${m.space_tokens[s] ? ` (+${m.space_tokens[s]} in space)` : ""}</span>` : ""}</div>
+      ${m ? `<div class="meta">space: ${m.spaces[s].length ? "" : "(empty)"}</div>${space}` : ""}
+    </div>`;
+  }).join("");
+  const pend = S.req && S.req.kind === "judge" ? S.req.pending : null;
+  const pile = v.discard.map(([c, a], i) => cardHTML(c, i === v.discard.length - 1 ? "top" : "", a)).join("")
+    + (pend ? `<span class="muted" style="align-self:center;margin:0 4px">← ${esc(pend.label)} plays</span>${pend.cards.map((c) => cardHTML(c, "pending")).join("")}` : "");
+  box.innerHTML = `<h2>Table</h2>
+    <div class="seats">${seats}</div>
+    <div class="row"><div><div class="muted">DECK</div><div class="card lg b" title="face down">${v.deck_size}</div></div>
+      <div style="flex:1;min-width:0"><div class="muted">DISCARD (bottom → top${pend ? "; as it was before the play you are judging" : ""})</div><div class="pile">${pile}</div></div></div>
+    ${m ? `<div class="kv"><b>Order</b>: ${m.order.map(P).join(" → ")} (${m.direction === 1 ? "seat order" : "reversed"}) · <b>pot</b> on DISCARD: ${m.pot}</div>` : ""}
+    ${m && m.declared != null ? `<div class="kv"><b>Declared</b>: “${esc(m.declared)}” by ${P(m.declared_by)}</div>` : ""}
+    ${rules}`;
+}
+
+function renderLog() {
+  const el = $("log"), atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+  el.innerHTML = S.log.length ? S.log.map((l) => `<div class="${l.cls}">${esc(l.text)}</div>`).join("") : `<div class="sys">No events yet.</div>`;
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+// ---- input ---------------------------------------------------------------------
+document.addEventListener("click", (e) => {
+  const tab = e.target.closest("#tabs button");
+  if (tab) {
+    for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b === tab);
+    for (const t of ["log", "message", "briefing", "help"]) $("tab-" + t).hidden = t !== tab.dataset.tab;
+    return;
+  }
+  const card = e.target.closest("#hand.pick .card");
+  if (card && S.req && S.req.kind === "play") {
+    const c = card.dataset.card, k = F.sel.indexOf(c);
+    if (k >= 0) F.sel.splice(k, 1);
+    else if (S.view.mechanics) F.sel.push(c);
+    else F.sel = [c];
+    if (F.sel.includes(F.give)) F.give = "";
+    render();
+    return;
+  }
+  if (e.target.id === "sendBtn") send();
+});
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (t.name === "call") { F.call = t.value ? +t.value : null; render(); }
+  else if (t.id === "o-angle") { F.angle = +t.value; render(); }
+  else if (t.id === "o-target") { F.target = t.value; render(); }
+  else if (t.id === "o-give") { F.give = t.value; render(); }
+  else if (t.id === "editRaw") { F.editRaw = t.checked; if (F.editRaw) F.raw = compose(); render(); }
+});
+document.addEventListener("input", (e) => {
+  const t = e.target;
+  if (t.id === "o-spend") F.spend = Math.max(0, Math.min(+t.value || 0, S.view.my_tokens));
+  else if (t.id === "o-declare") F.declare = t.value;
+  else if (t.id === "rule") F.rule = t.value;
+  else if (t.id === "raw") F.raw = t.value;
+  else if (t.id === "notes") S.notes = t.value;
+  else return;
+  // Update only the preview and the button, so typing isn't interrupted.
+  if ($("preview")) $("preview").textContent = compose();
+  if ($("sendBtn")) $("sendBtn").disabled = !ready();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
+});
+
+// ---- connection ----------------------------------------------------------------
+function connect() {
+  const es = new EventSource(location.pathname.replace(/\/$/, "") + "/events");
+  es.onopen = () => { $("conn").classList.add("on"); $("connText").textContent = "connected"; };
+  es.onerror = () => { $("conn").classList.remove("on"); $("connText").textContent = "reconnecting…"; };
+  let pending = false;
+  es.onmessage = (m) => {
+    handle(JSON.parse(m.data));
+    if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; render(); }); }
+  };
+}
+// Live "P2 is playing 4 s" timer.
+setInterval(() => {
+  const el = $("elapsed");
+  if (el && S.currentSince) el.textContent = Math.max(0, Math.round((Date.now() + (S.skew || 0) - S.currentSince) / 1000)) + " s";
+}, 500);
+render();
+connect();
+</script>
+</body>
+</html>

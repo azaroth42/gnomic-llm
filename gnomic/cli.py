@@ -1,6 +1,7 @@
 """Command line interface.
 
   gnomic play -p anthropic:claude-opus-5-5 -p openai:gpt-5 -p stats --games 5 --ui
+  gnomic play -p web?name=Ann -p anthropic:claude-opus-5-5 -p stats --open   # play in the browser
   gnomic replay logs/match-....jsonl          # watch a finished match in the UI
   gnomic rules                                # list the rule library
 """
@@ -57,16 +58,35 @@ def cmd_play(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    if args.ui:
+    from .players.web import WebHumanPlayer
+    humans = [(seat, p) for seat, p in enumerate(match.players) if isinstance(p, WebHumanPlayer)]
+    for _, p in humans:
+        p.should_stop = lambda: controls.stop_requested
+    if args.ui or humans:
+        import secrets
+        import socket
         from .server import serve
-        serve(bus, controls, args.host, args.port)
-        url = f"http://{args.host}:{args.port}/"
-        print(f"Spectator UI: {url}")
-        if args.paused:
+        # With human players at the table, the spectator view (which shows every hidden rule
+        # and hand) is served only with --ui, and only behind a key.
+        key = secrets.token_urlsafe(9) if humans and args.ui else None
+        serve(bus, controls, args.host, args.port, players=[p for _, p in humans], spectator=args.ui, key=key)
+        host = socket.gethostname() if args.host in ("0.0.0.0", "::") else args.host
+        base = f"http://{host}:{args.port}"
+        urls = []
+        for seat, p in humans:
+            url = f"{base}/play/{p.token}"
+            urls.append(url)
+            print(f"Player page for P{seat + 1} ({p.name}): {url}")
+        if args.ui:
+            url = f"{base}/" + (f"?key={key}" if key else "")
+            urls.insert(0, url)
+            print(f"Spectator UI{' (shows every hidden rule and hand: keep it from the players)' if key else ''}: {url}")
+        if args.paused and args.ui:
             controls.pause()
             print("Match is paused; press Resume in the UI to start.")
         if args.open:
-            webbrowser.open(url)
+            for url in urls:
+                webbrowser.open(url)
 
     summary: dict = {}
 
@@ -88,7 +108,7 @@ def cmd_play(args: argparse.Namespace) -> int:
         summary_path.write_text(json.dumps(summary, indent=2))
         _print_summary(summary)
         print(f"\nEvent log: {log_path}\nSummary:   {summary_path}")
-    if args.ui:
+    if args.ui or humans:
         print("UI still serving; Ctrl-C to exit.")
         try:
             while True:
@@ -139,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("play", help="run a match")
     p.add_argument("-p", "--player", action="append", default=[], metavar="SPEC",
-                   help="player spec, repeat per seat: random | stats | oracle | human | "
+                   help="player spec, repeat per seat: random | stats | oracle | human (terminal) | web (browser) | "
                         "anthropic:MODEL | openai:MODEL | gemini:MODEL | litellm:MODEL  (options: ?effort=high&name=X)")
     p.add_argument("--games", type=int, default=5)
     p.add_argument("--seed", type=int, default=None)
@@ -166,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--delay", type=float, default=None, help="seconds between turns (default 0.5 with --ui)")
     p.add_argument("--paused", action="store_true", help="start paused (with --ui)")
-    p.add_argument("--open", action="store_true", help="open the UI in a browser")
+    p.add_argument("--open", action="store_true", help="open the UI (and any web player pages) in a browser")
     p.set_defaults(fn=cmd_play)
 
     r = sub.add_parser("replay", help="view a finished match log in the UI")

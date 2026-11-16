@@ -221,6 +221,7 @@ class Game:
         rng: random.Random,
         starting_player: int,
         emit: Callable[..., object],
+        dealer: int | None = None,
         controls: Controls | None = None,
         hand_size: int = 7,
         max_rounds: int = 20,
@@ -236,6 +237,7 @@ class Game:
         self.scores, self.rng, self.emit = scores, rng, emit
         self.controls = controls or Controls()
         self.current = starting_player
+        self.dealer = dealer
         self.n = len(players)
         self.hand_size, self.max_rounds = hand_size, max_rounds
         self.players_make_rules = players_make_rules
@@ -328,6 +330,15 @@ class Game:
             mechanics_from=self.mechanics_from,
             wins_from=self.wins_from,
         )
+
+    def _notify(self, current: int | None) -> None:
+        """Send live table updates to players that follow the table (web players)."""
+        for seat, p in enumerate(self.players):
+            if p.live_updates:
+                try:
+                    p.on_table_update(self.view_for(seat), current)
+                except Exception:  # a display problem must not stop the game
+                    pass
 
     def _table(self) -> TableState | None:
         if not self.mechanics:
@@ -560,6 +571,8 @@ class Game:
             t0 = time.monotonic()
             try:
                 call = self.players[s].call(views[s], pending)
+            except StopMatch:
+                raise
             except Exception as e:
                 call = Call(None, meta={"error": f"{type(e).__name__}: {e}"})
             elapsed = time.monotonic() - t0
@@ -590,7 +603,7 @@ class Game:
             self.angles = [0] * len(self.discard)
         self.log.add(PublicEvent("game_start", self.index, 0, player=self.current,
                                  card=self.discard[-1], detail=str(len(self.stack))))
-        self.emit("game_start", game=self.index, starting_player=self.current,
+        self.emit("game_start", game=self.index, starting_player=self.current, dealer=self.dealer,
                   top=self.discard[-1], deck_size=len(self.deck),
                   hands={p.name: [str(c) for c in h] for p, h in zip(self.players, self.hands)},
                   num_rules=len(self.stack), mechanics=self.mechanics, table=self._table_json())
@@ -602,6 +615,7 @@ class Game:
         end_reason = "max_rounds"  # unless someone wins first
         try:
             while self.turn < self.max_turns:
+                self._notify(self.current)  # web players follow the table: last play's outcome, who's next
                 self.controls.gate()
                 seat = self.current
                 player = self.players[seat]
@@ -624,6 +638,8 @@ class Game:
                 t0 = time.monotonic()
                 try:
                     choice = player.choose(view)
+                except StopMatch:
+                    raise
                 except Exception as e:  # a crashing player must not kill the match
                     choice = Choice(card=None, meta={"error": f"{type(e).__name__}: {e}"})
                 elapsed = time.monotonic() - t0
@@ -763,6 +779,7 @@ class Game:
             self._pool.shutdown(wait=False)
 
         self.log.add(PublicEvent("game_end", self.index, self.turn, winner=winner, detail=end_reason))
+        self._notify(None)
         self.emit("game_end", game=self.index, winner=winner,
                   winner_name=self.players[winner].name if winner is not None else None,
                   turns=self.turn, reason=end_reason)
