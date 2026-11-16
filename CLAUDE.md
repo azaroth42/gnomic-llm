@@ -15,7 +15,8 @@ gnomic play -p anthropic:claude-opus-5-5 -p openai:gpt-5 -p gemini:gemini-3-pro 
 gnomic play -p oracle -p stats -p random --games 10 --seed 1     # baselines only, no API cost
 gnomic play -p mtplx -p oracle -p stats --games 3 --ui --open    # local MTPLX model, no API cost
 gnomic play -p 'web?name=Ann' -p oracle -p stats --games 3 --open  # play in the browser (prints your page's URL)
-gnomic replay logs/match-YYYYmmdd-HHMMSS.jsonl --open           # watch a finished match
+gnomic replay --seconds-per-turn 2 --open                       # index of finished matches, paced replay
+gnomic replay logs/match-YYYYmmdd-HHMMSS.jsonl --open           # watch one finished match
 gnomic play -p anthropic:claude-opus-5-5 -p stats --propose-rules --coder anthropic:claude-opus-5-5
 gnomic rules                                                    # list the rule library
 ```
@@ -430,6 +431,21 @@ decision time; illegal rate per game (learning curve); rule understanding (above
   and its coded form), and the match summary (with understood / understanding / turns to understand).
 - The UI is for humans only; it shows everything, hidden rules included.
 
+## Replaying finished matches (`gnomic/replay.py`, `static/replays.html`)
+
+- `gnomic replay` serves an **index of the match logs** in `--logs` (default `logs/`), newest first:
+  start time, players and models, games played with winners, turns, rules, length, and status
+  (finished / stopped / incomplete = no `match_end`, e.g. a crash). Each row opens the spectator UI at
+  `/match/<file>`. `gnomic replay <log>` opens that match directly (the index is its directory).
+- **`--seconds-per-turn N`** (user decision): every turn takes N seconds in the replay, however long the
+  players really took, so slow local models can be watched at a steady pace. Within a turn (turn_start to
+  resolution / no_cards) events keep their real proportions; a gap outside a turn is kept but capped at
+  N (*default*). Events are re-stamped with the send time so the UI's thinking timers show replay time.
+  Without it the whole match arrives at once. The index page has a seconds-per-turn box (passed as
+  `?spt=`; empty = all at once), defaulting to the command-line value.
+- Pacing is server-side, per connection: each viewer gets their own playback from the start, and a
+  reload starts over. There is no pause or seeking in a replay; the page hides the live controls.
+
 ## Code map
 
 ```
@@ -447,6 +463,7 @@ gnomic/providers.py   Anthropic / OpenAI / Gemini / LiteLLM chat sessions
 gnomic/players/       base (Choice, Call, Player), llm, baselines, human (terminal), web (browser), factory (spec strings)
 gnomic/events.py      EventBus → JSONL log + live subscribers
 gnomic/server.py      HTTP/SSE server: spectator UI (static/index.html) and player pages (static/play.html)
+gnomic/replay.py      `gnomic replay`: match index (static/replays.html), paced playback of logs
 gnomic/cli.py         `gnomic play | replay | rules`
 tests/                engine, protocol (fake LLM sessions), server, propose (sandbox, coder, fakes), mechanics, web,
                       understanding (hypotheses, grading, cache)

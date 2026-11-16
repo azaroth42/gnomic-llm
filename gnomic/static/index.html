@@ -28,6 +28,8 @@
   header h1 { font-size: 17px; margin: 0; }
   header .where { color: var(--muted); font-variant-numeric: tabular-nums; }
   header .spacer { flex: 1; }
+  header a { color: var(--accent, inherit); text-decoration: none; }
+  [hidden] { display: none !important; }
   header label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
   button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line);
            background: var(--panel); color: var(--ink); cursor: pointer; }
@@ -142,14 +144,16 @@
 </head>
 <body>
 <header>
+  <a id="back" href="/" hidden>← matches</a>
   <h1>Gnomic Mau</h1>
   <span class="conn" id="conn" title="connection"></span>
   <span class="where" id="where">waiting for match…</span>
   <span class="spacer"></span>
+  <span class="where" id="replayInfo" hidden></span>
   <label><input type="checkbox" id="showHands" checked> show hands</label>
-  <label>delay <input type="range" id="delay" min="0" max="3" step="0.25" value="0"> <span id="delayVal">0s</span></label>
-  <button id="pause">Pause</button>
-  <button id="stop">Stop</button>
+  <label class="live">delay <input type="range" id="delay" min="0" max="3" step="0.25" value="0"> <span id="delayVal">0s</span></label>
+  <button id="pause" class="live">Pause</button>
+  <button id="stop" class="live">Stop</button>
 </header>
 
 <div id="players"></div>
@@ -236,6 +240,10 @@ function apply(ev) {
       reset();
       offset = ev.server_now - Date.now() / 1000;
       if (ev.controls) S.controls = ev.controls;
+      S.replay = ev.replay || null;
+      break;
+    case "replay_end":
+      if (S.replay) S.replay.done = true;
       break;
     case "match_start":
       S.players = ev.players; S.dealer = ev.dealer; S.numGames = ev.num_games;
@@ -377,6 +385,12 @@ function renderHeader() {
   const r = S.round !== null && S.maxRounds ? ` · Round ${S.round + 1}/${S.maxRounds}` : "";
   $("where").innerHTML = S.players.length ? `Game ${g} · Turn ${t}${r}${who}${S.controls.paused ? " · <b>PAUSED</b>" : ""}${S.ended ? " · finished" : ""}` : "waiting for match…";
   $("pause").textContent = S.controls.paused ? "Resume" : "Pause";
+  // A replay of a finished match (gnomic replay): no live controls, a link back to the index.
+  $("back").hidden = !S.replay;
+  for (const el of document.querySelectorAll("header .live")) el.hidden = !!S.replay;
+  $("replayInfo").hidden = !S.replay;
+  if (S.replay) $("replayInfo").textContent = `replay of ${S.replay.file} · `
+    + (S.replay.seconds_per_turn ? `${S.replay.seconds_per_turn} s per turn` : "all at once") + (S.replay.done ? " · end of log" : "");
   $("delay").value = S.controls.delay; $("delayVal").textContent = `${S.controls.delay}s`;
 }
 
@@ -603,7 +617,8 @@ setInterval(() => {
 // ---------------------------------------------------------------- wiring
 
 function connect() {
-  const es = new EventSource("/events" + location.search);
+  // "/" for a live match, "/match/<log>" for a replay (gnomic/replay.py).
+  const es = new EventSource(location.pathname.replace(/\/(index\.html)?$/, "") + "/events" + location.search);
   es.onopen = () => $("conn").classList.add("on");
   es.onerror = () => { $("conn").classList.remove("on"); caughtUp = false; };
   es.onmessage = (m) => {

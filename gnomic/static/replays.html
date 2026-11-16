@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gnomic Mau — matches</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<!-- Index of finished matches for `gnomic replay` (gnomic/replay.py). Each row opens the spectator UI. -->
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e3e1da;
+    --accent: #2f6fde; --accent-soft: #e5eefc; --good: #1f8a4c; --good-soft: #e3f4ea;
+    --bad: #c4392f; --bad-soft: #fbe7e5; --warn: #b26a00; --warn-soft: #fdf0dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151517; --panel: #1f1f22; --ink: #ececef; --muted: #9a9aa2; --line: #2e2e33;
+      --accent: #6c9cff; --accent-soft: #1d2a44; --good: #4cc483; --good-soft: #17301f;
+      --bad: #ff6b5e; --bad-soft: #3a1c1a; --warn: #f0a742; --warn-soft: #3a2c14;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px; background: var(--panel);
+           border-bottom: 1px solid var(--line); flex-wrap: wrap; position: sticky; top: 0; }
+  header h1 { font-size: 17px; margin: 0; }
+  header .spacer { flex: 1; }
+  .muted { color: var(--muted); }
+  input, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+                  border-radius: 6px; padding: 4px 8px; }
+  input { width: 5em; background: var(--bg); }
+  button { cursor: pointer; }
+  main { padding: 14px 18px; }
+  table { border-collapse: collapse; width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+  tr:hover td { background: var(--accent-soft); }
+  td.num { font-variant-numeric: tabular-nums; }
+  .model { color: var(--muted); font-size: 12px; }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; white-space: nowrap; }
+  .finished { background: var(--good-soft); color: var(--good); }
+  .stopped { background: var(--warn-soft); color: var(--warn); }
+  .incomplete { background: var(--bad-soft); color: var(--bad); }
+  a.watch { color: #fff; background: var(--accent); padding: 4px 12px; border-radius: 6px; text-decoration: none;
+            font-weight: 600; white-space: nowrap; }
+  .file { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Gnomic Mau — matches</h1>
+  <span class="muted" id="where"></span>
+  <span class="spacer"></span>
+  <label class="muted">seconds per turn <input id="spt" type="number" min="0" step="0.5" placeholder="all"></label>
+  <span class="muted" title="Every turn takes this long in the replay, however long the players really took. Empty: the whole match at once.">ⓘ</span>
+  <button id="refresh">Refresh</button>
+</header>
+<main><div id="list" class="muted">Loading…</div></main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let matches = [];
+
+const fmtDate = (ts) => ts ? new Date(ts * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "–";
+function fmtDur(s) {
+  if (!s || s < 0) return "–";
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+function link(file) {
+  const v = $("spt").value.trim();
+  return `/match/${encodeURIComponent(file)}?spt=${encodeURIComponent(+v > 0 ? v : "")}`;
+}
+
+function render() {
+  if (!matches.length) { $("list").innerHTML = `No match logs found.`; return; }
+  const rows = matches.map((m) => {
+    const players = m.players.map((p) => `<div>${esc(p.name)}${p.model && p.model !== p.name ? ` <span class="model">${esc(p.model)}</span>` : ""}</div>`).join("");
+    const games = m.games.map((g, i) => `<div>G${i + 1}: ${g.winner_name ? esc(g.winner_name) : '<span class="muted">no winner</span>'}
+      <span class="muted">(${g.turns} turns${g.reason && g.reason.startsWith("win_rule") ? ", win condition" : ""})</span></div>`).join("");
+    return `<tr>
+      <td>${fmtDate(m.started)}<div class="file">${esc(m.file)}</div></td>
+      <td>${players}</td>
+      <td>${m.games.length}/${m.num_games ?? "?"}${games}</td>
+      <td class="num">${m.turns}</td>
+      <td class="num">${m.rules}${m.propose_rules ? ' <span class="muted">(made up)</span>' : ""}</td>
+      <td class="num">${fmtDur(m.last - m.started)}</td>
+      <td><span class="badge ${m.status}">${m.status}</span></td>
+      <td><a class="watch" href="${link(m.file)}">Watch</a></td></tr>`;
+  }).join("");
+  $("list").innerHTML = `<table><thead><tr><th>Started</th><th>Players</th><th>Games / winners</th><th>Turns</th>
+    <th>Rules</th><th>Length</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+async function load(first) {
+  try {
+    const body = await (await fetch("/api/matches")).json();
+    matches = body.matches;
+    $("where").textContent = `${matches.length} match${matches.length === 1 ? "" : "es"} in ${body.logs}`;
+    if (first) $("spt").value = localStorage.getItem("gnomic.spt") ?? (body.seconds_per_turn ?? "");
+    if (first && body.seconds_per_turn) $("spt").value = body.seconds_per_turn;  // the command line wins
+    render();
+  } catch (e) { $("list").textContent = "Couldn't load the match list: " + e; }
+}
+$("spt").addEventListener("input", () => { localStorage.setItem("gnomic.spt", $("spt").value); render(); });
+$("refresh").addEventListener("click", () => load(false));
+load(true);
+</script>
+</body>
+</html>
