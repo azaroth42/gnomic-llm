@@ -217,6 +217,21 @@ def test_baseline_match_runs_and_oracle_judges_perfectly():
     assert s["rules"][0]["rule"]["kind"] == "restriction"
 
 
+def test_winner_deals_next_game():
+    events = []
+    m = Match(MatchConfig(players=["oracle", "stats", "random"], num_games=6, seed=5, dealer=2),
+              emit=lambda kind, **kw: events.append((kind, kw)))
+    m.run()
+    starts = [kw for k, kw in events if k == "game_start"]
+    dealer = 2
+    for start, result in zip(starts, m.results):
+        assert start["dealer"] == dealer
+        assert start["starting_player"] == (dealer + 1) % 3
+        if result.winner is not None:
+            dealer = result.winner
+    assert m.dealer == dealer
+    assert any(r.winner not in (None, 2) for r in m.results)  # the dealer actually moved
+
 def test_gender_and_arithmetic_rules():
     assert C("JS").is_male and C("KD").is_male and C("QH").is_female and C("10H").gender is None
     same = RuleStack([RuleEntry(Rule("no_same_gender"), "a", -1)])

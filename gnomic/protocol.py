@@ -78,14 +78,29 @@ While you own a rule you judge every other player's play, so you are told about 
     YOUR HAND: 3S 9S 4H KH 2D 10C
     JUDGES: P2 P3                          (the players who own rules and so may call PENALTY)
     YOUR RULES (secret): R1: <text>        (only if you own rules)
+    YOUR HYPOTHESES: R2: <text> | R3: ?    (your current guesses at the rules you don't own)
   and then one request:
     YOUR TURN                 play a card, then (if you own a rule) judge your own play
     JUDGE: P2 plays 5D on JH  decide whether another player's play broke one of your rules
+
+HYPOTHESES
+For every rule you don't own, keep a current best statement of exactly what it says, as a precise
+rule of its own (not combined with the other rules), for example
+  R2: You may not play a red card on a red card.
+  R3: A Queen may be played on anything.
+Say whether it forbids or allows plays (or, where they exist, what it makes happen or how it wins).
+The engine scores how soon and how closely your hypotheses match the hidden rules: it turns each
+hypothesis into code and compares it with the real rule over many situations. You are not scored on
+your own rules. Write R<n>: ? while you have no idea. Write only the lines that changed: the others
+are kept, and STATE shows them as YOUR HYPOTHESES. Keep a hypothesis's wording unless you change
+your mind about the rule. Nobody else sees your hypotheses.
 
 REPLY FORMAT
 Reason as much as you like, then end your reply with:
 NOTES:
 <your updated private notes>
+HYPOTHESES:
+R<n>: <your hypothesis>     (only the ones that changed; leave the block out if none did)
 and then, for YOUR TURN, the card you play and, if you own a rule, your call on your own play:
 PLAY: <card>
 CALL: PENALTY R<n>      or      CALL: NONE      (leave this line out if you own no rules)
@@ -102,12 +117,12 @@ Your goal is to win games. Bad plays cost you a card when someone calls them, an
 
 RULE4_ENGINE = (
     " 4. One player is the dealer. Before game 1 the dealer is secretly told rule R1. After each game the winner is "
-    "secretly told one new rule, which is added to the rules in effect. Everyone is told when a rule is added and who "
+    "secretly told one new rule and becomes the dealer of the next game. The rule is added to the rules in effect. Everyone is told when a rule is added and who "
     "owns it, but only its owner is told what it says. Rules carry over from game to game.\n")
 
 RULE4_PLAYERS = (
     " 4. One player is the dealer. Before game 1 the dealer makes up rule R1. After each game the winner makes up one "
-    "new rule, which is added to the rules in effect. The engine asks with MAKE A RULE (see below), turns the rule into "
+    "new rule and becomes the dealer of the next game. The rule is added to the rules in effect. The engine asks with MAKE A RULE (see below), turns the rule into "
     "code and checks that the game stays playable; if it can't use your rule it tells you why and asks for another, "
     "and if that keeps failing it gives you a rule instead. Everyone is told when a rule is added and who owns it, but "
     "only its owner knows what it says. Rules carry over from game to game.\n")
@@ -117,6 +132,7 @@ MAKING UP A RULE
 When you are the dealer (before game 1) or win a game, the engine sends MAKE A RULE. Reply with your
 reasoning, then NOTES: as usual, then
 RULE: <your rule in one or two precise sentences>
+(NOTES and HYPOTHESES come before RULE, as in every reply.)
 Your rule is enforced exactly as the engine implements it, and that wording is what you will see in YOUR RULES.
 """
 
@@ -265,9 +281,17 @@ def _discard(view: PlayerView) -> str:
     return " ".join(str(Placed(c, a)) for c, a in zip(view.discard, view.table.angles)) or "(empty)"
 
 
+def render_hypotheses(view: PlayerView, hypotheses: dict[int, str] | None) -> str | None:
+    """YOUR HYPOTHESES line: one entry per rule the player doesn't own ("?" if none yet)."""
+    rules = [n for n in range(1, view.num_rules + 1) if n not in view.my_rule_numbers]
+    if hypotheses is None or not rules:
+        return None
+    return "YOUR HYPOTHESES: " + " | ".join(f"R{n}: {hypotheses.get(n) or '?'}" for n in rules)
+
+
 def render_message(view: PlayerView, events: list[PublicEvent], request: str,
                    notes: str | None = None, resync: bool = False, state: str | None = None,
-                   private: list[str] | None = None) -> str:
+                   private: list[str] | None = None, hypotheses: dict[int, str] | None = None) -> str:
     parts = []
     if resync:
         parts.append("RESYNC: older messages were dropped. EVENTS below is the full public log of the match.")
@@ -276,7 +300,9 @@ def render_message(view: PlayerView, events: list[PublicEvent], request: str,
     parts.append("EVENTS:\n" + ("\n".join(render_event(e) for e in events) if events else "(none)"))
     if private:
         parts.append("PRIVATE (only you know this):\n" + "\n".join(private))
-    parts.append(state if state is not None else render_state(view))
+    state = state if state is not None else render_state(view)
+    hyp = render_hypotheses(view, hypotheses)
+    parts.append(state + ("\n" + hyp if hyp else ""))
     parts.append(request)
     return "\n\n".join(parts)
 
@@ -382,15 +408,49 @@ _PLAY_RE = re.compile(r"(?im)^[\W_]*PLAY[\W_]*:\s*\**\s*([^\s*`]+(?:\s+of\s+\w+)
 _CALL_RE = re.compile(r"(?im)^[\W_]*CALL[\W_]*:\s*\**\s*([^\n]+)")
 _RULE_RE = re.compile(r"(?i)\bR(?:ULE)?\s*#?\s*(\d+)\b")
 _NOTES_RE = re.compile(r"(?im)^[\W_]*NOTES[\W_]*:")
+_HYP_RE = re.compile(r"(?im)^[\W_]*HYPOTHES[EI]S[\W_]*:")
+_HYP_LINE_RE = re.compile(r"^[\W_]*R\s*(\d+)[\W_]*?[:=\-\u2013\u2014][ \t]*(.*)$")
+_STOP_RE = re.compile(r"(?i)^[\W_]*(PLAY|CALL|RULE|NOTES|ANGLE|SPEND|TARGET|DECLARE|GIVE)[\W_]*:")
+MAX_HYPOTHESIS = 400  # characters
 
 
 def _split(text: str, final: re.Match) -> tuple[str | None, str]:
-    """Return (notes, reasoning) given the final PLAY/CALL line."""
+    """Return (notes, reasoning) given the final PLAY/CALL line. Notes end at a HYPOTHESES block."""
     notes_m = [m for m in _NOTES_RE.finditer(text) if m.start() < final.start()]
+    hyp_m = [m for m in _HYP_RE.finditer(text) if m.start() < final.start()]
     if notes_m:
         n = notes_m[-1]
-        return (text[n.end():final.start()].strip() or None), text[:n.start()].strip()
+        end = min([h.start() for h in hyp_m if h.start() > n.end()] + [final.start()])
+        start = min([h.start() for h in hyp_m] + [n.start()]) if hyp_m and hyp_m[-1].start() < n.start() else n.start()
+        return (text[n.end():end].strip() or None), text[:start].strip()
+    if hyp_m:
+        return None, text[:hyp_m[-1].start()].strip()
     return None, text[:final.start()].strip()
+
+
+def parse_hypotheses(text: str) -> dict[int, str]:
+    """The last HYPOTHESES block: {rule number: text}, "" for "?" (no hypothesis). A hypothesis may
+    run over several lines; the block ends at the next PLAY/CALL/RULE/NOTES/option line. Problems
+    here never make a reply invalid: unreadable lines are ignored."""
+    found = list(_HYP_RE.finditer(text))
+    if not found:
+        return {}
+    out: dict[int, str] = {}
+    current = None
+    for line in text[found[-1].end():].splitlines():
+        if _STOP_RE.match(line):
+            break
+        m = _HYP_LINE_RE.match(line)
+        if m:
+            current = int(m.group(1))
+            out[current] = m.group(2)
+        elif current is not None and line.strip():
+            out[current] += " " + line
+    cleaned = {}
+    for n, t in out.items():
+        t = " ".join(t.replace("**", "").replace("`", "").split()).strip()
+        cleaned[n] = "" if t.strip("?. ").lower() in ("", "unknown", "none", "no idea") else t[:MAX_HYPOTHESIS]
+    return cleaned
 
 
 def parse_play(text: str, hand: tuple[Card, ...], own: tuple[int, ...] = (),

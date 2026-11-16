@@ -1,6 +1,6 @@
 """Build players from spec strings.
 
-  random | stats | oracle | human
+  random | stats | oracle | human | web
   <provider>:<model>[?opt=val&opt=val]   provider in anthropic, openai, gemini, litellm
 
 Any spec can take name=<display name>. Examples:
@@ -23,6 +23,7 @@ from .base import Player
 from .baselines import OraclePlayer, RandomPlayer, StatsPlayer
 from .human import HumanPlayer
 from .llm import LLMPlayer
+from .web import WebHumanPlayer
 
 _PLAYER_OPTS = {"name", "max_retries_turn", "history_messages", "context_fill"}
 _MODEL_OPTIONAL = {"mtplx"}
@@ -59,6 +60,8 @@ def make_player(spec: str, stack: RuleStack, seed: int | None = None, default_na
         return OraclePlayer(name, stack, seed)
     if provider == "human":
         return HumanPlayer(name)
+    if provider == "web":
+        return WebHumanPlayer(name, max_retries=int(opts.get("max_retries_turn", 2)))
     if provider in PROVIDERS:
         if not model and provider not in _MODEL_OPTIONAL:
             raise ValueError(f"spec {spec!r} needs a model, e.g. {provider}:<model>")

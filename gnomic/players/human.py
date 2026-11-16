@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from ..game import PendingPlay, PlayerView
-from ..protocol import (judge_request, parse_call, parse_play, render_message, render_rule_state, rule_request,
-                        system_prompt, turn_request)
+from ..protocol import (judge_request, parse_call, parse_hypotheses, parse_play, render_message, render_rule_state,
+                        rule_request, system_prompt, turn_request)
 from .base import Call, Choice, Player, Proposal
 
 
 class HumanPlayer(Player):
     kind = "human"
     makes_rules = True
+    states_hypotheses = True
 
     def __init__(self, name: str):
         super().__init__(name)
@@ -23,9 +24,13 @@ class HumanPlayer(Player):
             print(system_prompt(view))
             self.shown_intro = True
         print("\n" + render_message(view, list(view.log[self.cursor:]), request, state=state,
-                                     private=list(view.private[self.private_cursor:])))
+                                     private=list(view.private[self.private_cursor:]), hypotheses=self.hypotheses))
         self.cursor = len(view.log)
         self.private_cursor = len(view.private)
+        if any(n not in view.my_rule_numbers for n in range(1, view.num_rules + 1)):
+            raw = input("HYPOTHESES that changed, separated by ';' (e.g. R2: no red on red; R3: ?), or blank: ").strip()
+            if raw:
+                self.record_hypotheses(view, parse_hypotheses("HYPOTHESES:\n" + "\n".join(raw.split(";"))))
 
     def choose(self, view: PlayerView) -> Choice:
         self._show(view, turn_request(view))

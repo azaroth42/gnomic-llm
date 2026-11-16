@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 from ..cards import Card
 from ..game import PendingPlay, PlayerView
@@ -41,9 +42,29 @@ class Proposal:
 class Player:
     kind = "base"
     makes_rules = False  # can this player make up its own rules (--propose-rules)? Else it gets library rules.
+    live_updates = False  # is on_table_update called as the table changes (web players)?
+    states_hypotheses = False  # does this player state hypotheses about the rules (LLMs, humans)?
 
     def __init__(self, name: str):
         self.name = name
+        self.hypotheses: dict[int, str] = {}  # rule number -> current hypothesis ("" = none)
+        # Set by the match: called with (player, view, {rule: text}) whenever hypotheses change.
+        self.hypothesis_sink: Callable[["Player", PlayerView, dict[int, str]], None] | None = None
+
+    def record_hypotheses(self, view: PlayerView, stated: dict[int, str]) -> dict[int, str]:
+        """Keep the hypotheses a reply stated, for rules that exist and that this player doesn't own
+        (nobody is scored on their own rules). Returns what changed and passes it to the match."""
+        own = set(view.my_rule_numbers)
+        changes = {}
+        for n, text in stated.items():
+            if n in own or not 1 <= n <= view.num_rules:
+                continue
+            if self.hypotheses.get(n, "") != text:
+                self.hypotheses[n] = text
+                changes[n] = text
+        if changes and self.hypothesis_sink is not None:
+            self.hypothesis_sink(self, view, changes)
+        return changes
 
     @property
     def model(self) -> str | None:
@@ -68,4 +89,13 @@ class Player:
         pass
 
     def on_game_end(self, game: int, winner: int | None) -> None:
+        pass
+
+    def on_table_update(self, view: PlayerView, current: int | None) -> None:
+        """The public table changed (only called if live_updates). `current` is the seat about to
+        play (sent before the pacing delay), or None at the end of a game. Never asks for anything."""
+        pass
+
+    def on_match_end(self, log: tuple, scores: list[int], stopped: bool) -> None:
+        """The match is over. `log` is the full public log (PublicEvent), as players see it."""
         pass

@@ -106,7 +106,8 @@ class ProposedRuleAuthor:
                 result = self.coder.implement(proposal.text, samples[:60], mechanics=mechanics, wins=wins)
             except CoderFailure as e:
                 reason = f"the engine could not implement it: {e}"
-                self.emit("rule_rejected", **base, stage="coder", reason=reason, text=proposal.text)
+                self.emit("rule_rejected", **base, stage="coder", reason=reason, text=proposal.text,
+                          coder=getattr(e, "meta", {}))
                 feedback = reason
                 continue
             problem = rule_problem(stack.rules(), result.rule, samples, first=first)
