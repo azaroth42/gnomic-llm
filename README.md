@@ -63,8 +63,11 @@ gnomic play -p anthropic:claude-opus-5-5 -p openai:gpt-5 -p gemini:gemini-3-pro 
 gnomic play -p anthropic:claude-opus-5-5 -p openai:gpt-5 -p stats --propose-rules \
     --coder anthropic:claude-opus-5-5
 
-# Replay a finished match in the UI
-gnomic replay logs/match-YYYYmmdd-HHMMSS.jsonl --open
+# Replay a finished match in the UI, one turn every 2 seconds
+gnomic replay logs/match-YYYYmmdd-HHMMSS.jsonl --seconds-per-turn 2 --open
+
+# Browse every finished match and pick one to replay
+gnomic replay --open
 
 # List the rule library
 gnomic rules
@@ -90,9 +93,26 @@ Give one `-p` per seat. Each spec is either a baseline or `<provider>:<model>[?o
 | `litellm:<model>` | Anything LiteLLM can route to |
 | `mtplx` | A local MTPLX server (no model name needed) |
 
-Options include `name=` (display name), `effort=` (Anthropic, OpenAI, LiteLLM),
-`thinking_level=` / `thinking_budget=` (Gemini), `max_tokens=`, `base_url=` and
-`context_tokens=`. For example:
+Options go after `?`, joined with `&`:
+
+| Option | Applies to | Meaning |
+|---|---|---|
+| `name=` | every spec | Display name (spectators only; players see seats) |
+| `effort=` | Anthropic, OpenAI, LiteLLM | Reasoning effort (e.g. `low`, `medium`, `high`) |
+| `thinking=off` | Anthropic | Turn off adaptive thinking, for models without it |
+| `fallbacks=default` | Anthropic | Allow server-side refusal fallbacks to another model (off by default, since another model's answers would be credited to this one) |
+| `thinking_level=`, `thinking_budget=` | Gemini | Thinking level, or a thinking token budget |
+| `project=`, `location=` | Gemini | Google Cloud project and region (override `GMAU_GEMINI_PROJECT`, `GMAU_GEMINI_LOCATION`) |
+| `base_url=`, `api_key_env=` | OpenAI, MTPLX | An OpenAI-compatible server, and the environment variable holding its key |
+| `api_base=` | LiteLLM | API base URL |
+| `max_tokens=` | LLM providers | Output token limit (Anthropic default 32000, MTPLX 8192) |
+| `max_retries=`, `timeout=` | `max_retries`: LLM providers except Gemini; `timeout`: OpenAI, MTPLX | API retries, and request timeout in seconds (OpenAI default 600) |
+| `context_tokens=` | LLM providers | The model's context window, if the provider doesn't report it |
+| `history_messages=` | LLM players | Exchanges before the conversation restarts with a resync (default 120) |
+| `context_fill=` | LLM players | Share of the context window that triggers a resync (default 0.6) |
+| `max_retries_turn=` | LLM and `web` players | Retries after an invalid reply before the engine plays or calls for you (default 2) |
+
+For example:
 
 ```bash
 gnomic play -p 'anthropic:claude-opus-5-5?effort=high&name=Opus' -p 'openai:gpt-5?effort=medium' -p stats
@@ -106,8 +126,10 @@ spectator UI shows those notes, but other players never see them.
 
 | Option | Default | Meaning |
 |---|---|---|
+| `-p SPEC`, `--player SPEC` | | One per seat (see Players) |
 | `--games N` | 5 | Games in the match |
 | `--seed N` | random | Seed for the deal, the dealer and library rules |
+| `--hand-size N` | 7 | Cards dealt to each player |
 | `--max-rounds N` | 20 | Rounds before a game ends with no winner |
 | `--dealer SEAT` | random | Dealer seat (0-based) |
 | `--propose-rules` | off | Dealer and winners make up their rules; baselines still get library rules |
@@ -118,8 +140,12 @@ spectator UI shows those notes, but other players never see them.
 | `--rule-attempts N` | 3 | Proposals per rule before a library rule is used instead |
 | `--mechanics-from N` | 3 | First game in which rules may add table mechanics (0 = never) |
 | `--wins-from N` | 6 | First game in which rules may be win conditions (0 = never) |
-| `--ui`, `--open`, `--port`, `--delay`, `--paused` | | Spectator web UI |
 | `--log PATH` | `logs/match-<time>.jsonl` | Event log location |
+| `--ui` | off | Serve the spectator web UI |
+| `--open` | off | Open the UI (and any `web` player pages) in a browser |
+| `--host`, `--port` | `127.0.0.1`, 8765 | Where the UI and player pages are served |
+| `--delay S` | 0.5 with `--ui`, else 0 | Seconds between turns |
+| `--paused` | off | Start paused (with `--ui`) |
 
 ## Metrics
 
@@ -146,6 +172,23 @@ the table, each player's hand, every rule in effect with its owner, and which ru
 play. It also shows the calls and their outcomes, any effects, and each model's reasoning,
 thinking summary and notes. It can pause, resume, stop and change the pace. The UI is for
 humans and shows everything, hidden rules included.
+
+## Replaying matches
+
+`gnomic replay` serves an index of the match logs in `logs/`, newest first. Each row shows the
+start time, the players and models, the games and their winners, the number of turns and rules,
+the length, and whether the match finished. Click a row to watch that match in the spectator UI.
+Give a log file (`gnomic replay logs/match-….jsonl`) to open one match directly.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--seconds-per-turn N` | all at once | Every turn takes N seconds, however long the players really took. Within a turn, events keep their real proportions, and a pause between turns is capped at N seconds. The index page has a box to change it per replay (empty = all at once) |
+| `--logs DIR` | `logs` | Directory of match logs for the index |
+| `--open` | off | Open the index (or the match) in a browser |
+| `--host`, `--port` | `127.0.0.1`, 8765 | Where to serve |
+
+Pacing makes slow local models watchable at a steady speed. Each viewer gets their own playback
+from the start, and a reload starts over. There is no pause or seeking in a replay.
 
 ## Playing in the browser
 
