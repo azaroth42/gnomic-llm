@@ -41,6 +41,40 @@ from .base import Call, Choice, Player, Proposal
 MAX_REPLY = 20_000  # characters
 
 
+def _played_cards(ev: PublicEvent) -> list[str]:
+    """The cards of a public play event: a single card, or the cards at the start of a multi-card move."""
+    if not ev.move:
+        return [str(ev.card)] if ev.card else []
+    return ev.move.split(" (")[0].split(" at ")[0].split()
+
+
+def penalty_marks(view: PlayerView) -> tuple[dict[str, dict], dict | None]:
+    """Which DISCARD cards drew penalty calls this game, from the public log only.
+
+    Returns ({card: {"mark": "upheld"|"rejected", "text": log line}} for cards now on DISCARD,
+    the last play this game as {"mark", "text"} or None). "upheld" = the player drew (a player's
+    call or the engine's R0 call was upheld); "rejected" = only false calls, the callers drew.
+    An uncalled violation is never revealed, so there is no mark for it.
+    """
+    marks: dict[str, dict] = {}
+    last = None
+    for ev in view.log:
+        if ev.game != view.game:
+            continue
+        if ev.kind == "play":
+            mark = "upheld" if ev.upheld_by or ev.engine_call else "rejected" if ev.calls else None
+            last = {"mark": mark, "text": render_event(ev)}
+            for c in _played_cards(ev):
+                if mark:
+                    marks[c] = last
+                else:
+                    marks.pop(c, None)
+        elif ev.kind == "reshuffle":  # everything but the top card went back into DECK
+            marks = {c: m for c, m in marks.items() if c == str(ev.card)}
+    on_pile = {str(c) for c in view.discard}
+    return {c: m for c, m in marks.items() if c in on_pile}, last
+
+
 def view_json(view: PlayerView, *, table: bool = True) -> dict:
     """The structured form of what render_state shows. Built only from the player's own view."""
     n = len(view.player_names)
@@ -57,7 +91,9 @@ def view_json(view: PlayerView, *, table: bool = True) -> dict:
         return out
     angles = list(view.table.angles) if view.table is not None and len(view.table.angles) == len(view.discard) \
         else [0] * len(view.discard)
+    marks, last_play = penalty_marks(view)
     out.update({
+        "pile_marks": marks, "last_play": last_play,
         "hand": [str(c) for c in view.hand],
         "discard": [[str(c), a] for c, a in zip(view.discard, angles)],
         "deck_size": view.deck_size,

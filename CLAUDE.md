@@ -344,6 +344,11 @@ Clarifications and decisions (all made by the user unless marked *default*):
   per rule the player doesn't own. Edits are kept as drafts and the changed ones go into the
   next reply's HYPOTHESES block, so they're parsed and graded exactly like an LLM's. Players never
   see scores during the match. The terminal `human` player is asked for changed hypotheses too.
+- **Penalties on the page** (user decision): DISCARD cards whose play drew calls are marked as in the
+  spectator view (red `!` = penalty upheld, including the engine's R0 call; amber `✗` = only false
+  calls), with the log line on hover, plus a "Last play" line and coloured penalty lines in the log.
+  `web.penalty_marks` builds them from the public log alone (marks for the current game, cleared by a
+  reshuffle except for the top card). Uncalled violations stay hidden: there is no `?` mark.
 - **Hand sorting** (user decision): A → K, K → A, or by suit (♠ ♥ ♣ ♦, then value), remembered in
   the browser. Display only; a multi-card play is still in click order.
 - **Transport:** each `web` player has a private outbox (`EventBus`, no log file) and a secret

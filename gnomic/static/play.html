@@ -65,6 +65,18 @@
                color: var(--muted); font-weight: 400; }
   .card.top { border-color: var(--ink); border-width: 2px; }
   .card.pending { border: 2px dashed var(--warn); background: var(--warn-soft); }
+  /* DISCARD cards that drew penalty calls (from the public log) */
+  .card.pen::after { position: absolute; top: -7px; right: -6px; font-size: 10px; line-height: 14px; min-width: 14px;
+                     padding: 0 2px; border-radius: 7px; text-align: center; color: #fff; font-weight: 700; }
+  .card.pen-upheld { outline: 3px solid var(--bad); outline-offset: -1px; background: var(--bad-soft); z-index: 1; }
+  .card.pen-upheld::after { content: "!"; background: var(--bad); }
+  .card.pen-rejected { outline: 3px solid var(--warn); outline-offset: -1px; background: var(--warn-soft); z-index: 1; }
+  .card.pen-rejected::after { content: "✗"; background: var(--warn); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; align-items: center; }
+  .legend .card { min-width: 14px; height: 16px; margin-right: 6px; vertical-align: middle; }
+  .lastplay { border-radius: 6px; padding: 5px 8px; margin: 6px 0; background: var(--bg); }
+  .lastplay.upheld { background: var(--bad-soft); color: var(--bad); }
+  .lastplay.rejected { background: var(--warn-soft); color: var(--warn); }
   .pile { display: flex; flex-wrap: wrap; gap: 4px 3px; align-items: flex-end; padding-bottom: 14px; }
   .hand { display: flex; flex-wrap: wrap; gap: 6px; }
   .hand .card { cursor: default; }
@@ -122,6 +134,8 @@
   #log { max-height: 62vh; overflow: auto; }
   #log div { padding: 2px 0; border-bottom: 1px solid var(--line); }
   #log .private { color: var(--warn); }
+  #log .pen-upheld { color: var(--bad); background: var(--bad-soft); }
+  #log .pen-rejected { color: var(--warn); background: var(--warn-soft); }
   #log .mine { color: var(--accent); }
   #log .sys { color: var(--muted); font-style: italic; }
   .scroll { max-height: 62vh; overflow: auto; }
@@ -461,20 +475,33 @@ function renderTable() {
     </div>`;
   }).join("");
   const pend = S.req && S.req.kind === "judge" ? S.req.pending : null;
-  const pile = v.discard.map(([c, a], i) => cardHTML(c, i === v.discard.length - 1 ? "top" : "", a)).join("")
+  const marks = v.pile_marks || {};
+  const pile = v.discard.map(([c, a], i) => {
+    const m = marks[c], html = cardHTML(c, (i === v.discard.length - 1 ? "top" : "") + (m ? ` pen pen-${m.mark}` : ""), a);
+    return m ? html.replace(/title="[^"]*"/, `title="${esc(m.text)}"`) : html;
+  }).join("")
     + (pend ? `<span class="muted" style="align-self:center;margin:0 4px">← ${esc(pend.label)} plays</span>${pend.cards.map((c) => cardHTML(c, "pending")).join("")}` : "");
   box.innerHTML = `<h2>Table</h2>
     <div class="seats">${seats}</div>
     <div class="row"><div><div class="muted">DECK</div><div class="card lg b" title="face down">${v.deck_size}</div></div>
-      <div style="flex:1;min-width:0"><div class="muted">DISCARD (bottom → top${pend ? "; as it was before the play you are judging" : ""})</div><div class="pile">${pile}</div></div></div>
+      <div style="flex:1;min-width:0"><div class="muted">DISCARD (bottom → top${pend ? "; as it was before the play you are judging" : ""})</div><div class="pile">${pile}</div>
+        <div class="legend"><span>${cardHTML("7H", "sm pen pen-upheld")}penalty upheld: the player drew</span>
+          <span>${cardHTML("7S", "sm pen pen-rejected")}false call: the caller drew</span><span>hover a card for the call</span></div></div></div>
+    ${v.last_play ? `<div class="lastplay ${v.last_play.mark || ""}"><b>Last play</b>: ${esc(v.last_play.text.replace(/^G\d+ /, ""))}</div>` : ""}
     ${m ? `<div class="kv"><b>Order</b>: ${m.order.map(P).join(" → ")} (${m.direction === 1 ? "seat order" : "reversed"}) · <b>pot</b> on DISCARD: ${m.pot}</div>` : ""}
     ${m && m.declared != null ? `<div class="kv"><b>Declared</b>: “${esc(m.declared)}” by ${P(m.declared_by)}</div>` : ""}
     ${rules}`;
 }
 
+// A public play line that drew calls: "... PENALTY called by P3 under R1 (upheld): P2 draws 1".
+function penClass(text) {
+  const m = /PENALTY called by (.*?): /.exec(text);
+  return !m ? "" : /\(upheld\)/.test(m[1]) ? "pen-upheld" : "pen-rejected";
+}
+
 function renderLog() {
   const el = $("log"), atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-  el.innerHTML = S.log.length ? S.log.map((l) => `<div class="${l.cls}">${esc(l.text)}</div>`).join("") : `<div class="sys">No events yet.</div>`;
+  el.innerHTML = S.log.length ? S.log.map((l) => `<div class="${l.cls || penClass(l.text)}">${esc(l.text)}</div>`).join("") : `<div class="sys">No events yet.</div>`;
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
 
