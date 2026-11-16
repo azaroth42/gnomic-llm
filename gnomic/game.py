@@ -12,12 +12,12 @@ Each turn:
      whose call is not upheld draws 1 for a false call.
      A violation its owner doesn't call costs nothing and is never revealed.
   4. From game 3 (`mechanics`, see mechanics.py) a play is a *move* with options, and if no
-     penalty was upheld the rules' effects happen (reverse, skip, tokens, spaces, trades...).
+     penalty was upheld the rules' effects happen (tokens, spaces, trades, draws...).
      A multi-card move that no rule permits breaks R0, which the engine calls itself.
   5. A player who has emptied their hand after steps 3 and 4 wins.
 
-A game with no winner ends after `max_rounds` rounds (max_rounds x players turns; with skips
-and extra turns that is no longer exactly every player's card count).
+A game with no winner ends after `max_rounds` rounds (max_rounds x players turns).
+Play always goes in seat order: no rule can change whose turn it is.
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ class PlayerView:
     max_rounds: int = 20               # a game with no winner ends after this many rounds
     judges: tuple[int, ...] = ()       # seats that own at least one rule, i.e. may call PENALTY
     players_make_rules: bool = False   # do the dealer and winners make up their own rules (--propose-rules)?
-    table: TableState | None = None    # game 3+ table state (direction, tokens, spaces, angles, declaration)
+    table: TableState | None = None    # game 3+ table state (tokens, spaces, angles, declaration)
     private: tuple[str, ...] = ()      # private notices for this player (trades, peeks), whole match
     mechanics_from: int = 0            # 1-based game from which mechanics apply; 0 = never
     wins_from: int = 0                 # 1-based game from which rules may be win conditions; 0 = never
@@ -244,7 +244,6 @@ class Game:
         self.mechanics, self.mechanics_from = mechanics, mechanics_from
         self.wins_from = wins_from
         self.private = private if private is not None else [[] for _ in players]
-        self.direction = 1
         self.tokens = [0] * len(players)
         self.space_tokens = [0] * len(players)
         self.pot = 0
@@ -343,7 +342,7 @@ class Game:
     def _table(self) -> TableState | None:
         if not self.mechanics:
             return None
-        return TableState(direction=self.direction, tokens=tuple(self.tokens),
+        return TableState(tokens=tuple(self.tokens),
                           spaces=tuple(tuple(sp) for sp in self.spaces), angles=tuple(self.angles),
                           space_tokens=tuple(self.space_tokens), pot=self.pot,
                           declared=self.declared[0] if self.declared else None,
@@ -382,13 +381,6 @@ class Game:
         """Apply one effect; return its public description (None if it did nothing)."""
         P = lambda s: f"P{s + 1}"  # noqa: E731
         kind, args = op[0], op[1:]
-        if kind == "reverse":
-            self.direction = -self.direction
-            return "order of play reversed"
-        if kind == "skip":
-            return "next player skipped"
-        if kind == "extra_turn":
-            return f"{P(seat)} plays again"
         if kind == "move_tokens":
             return self._move_tokens(*args)
         if kind == "move_card":
@@ -538,7 +530,7 @@ class Game:
     def _table_json(self) -> dict | None:
         if not self.mechanics:
             return None
-        return {"direction": self.direction, "tokens": list(self.tokens), "space_tokens": list(self.space_tokens),
+        return {"tokens": list(self.tokens), "space_tokens": list(self.space_tokens),
                 "pot": self.pot, "spaces": [[str(p) for p in sp] for sp in self.spaces], "angles": self.angles[-12:],
                 "declared": list(self.declared) if self.declared else None}
 
@@ -717,12 +709,9 @@ class Game:
 
                 # Effects happen only if no penalty was upheld (user decision); they never touch penalties.
                 effects: list[str] = []
-                skips, extra_turn = 0, False
                 if self.mechanics and not penalty:
                     for _, op in self.stack.effects(ctx):
                         text = self._apply(seat, move or Move((card,)), op)
-                        skips += op[0] == "skip"
-                        extra_turn |= op[0] == "extra_turn"
                         if text:
                             effects.append(text)
                     if effects:
@@ -771,10 +760,7 @@ class Game:
                               rule=self.stack.entries[won_by].rule.description,
                               hand=[str(c) for c in hand])
                     break
-                if extra_turn:
-                    self.current = seat
-                else:
-                    self.current = (seat + self.direction * (1 + skips)) % self.n
+                self.current = (seat + 1) % self.n
         finally:
             self._pool.shutdown(wait=False)
 

@@ -42,7 +42,7 @@ CARD_ATTRS = {"rank", "suit", "is_red", "color", "is_face", "is_male", "is_femal
 SEQ_ATTRS = {"count", "index"}
 ALLOWED_ATTRS = CTX_ATTRS | CARD_ATTRS | SEQ_ATTRS
 # game 3+ (mechanics.py): the move's options, the table, placed cards' angles, and the fx API
-MECHANICS_ATTRS = {"cards", "angle", "spend", "target", "declare", "direction", "next_player", "tokens", "spaces",
+MECHANICS_ATTRS = {"cards", "angle", "spend", "target", "declare", "next_player", "tokens", "spaces",
                    "pile_angles", "declared", "declared_by", "game", "space_tokens", "pot"} | FX_METHODS
 
 RANGE_CAP = 64
@@ -169,7 +169,7 @@ def _describe_ctx(ctx: PlayContext) -> str:
            f"hand_sizes={list(ctx.hand_sizes)} turn={ctx.turn} num_players={ctx.num_players}")
     if ctx.table is not None:
         out += (f" cards={[str(c) for c in ctx.cards]} angle={ctx.angle} spend={ctx.spend} target={ctx.target}"
-                f" declare={ctx.declare!r} direction={ctx.direction} tokens={list(ctx.tokens)}"
+                f" declare={ctx.declare!r} tokens={list(ctx.tokens)}"
                 f" spaces={[[str(p) for p in sp] for sp in ctx.spaces]} pile_angles={list(ctx.pile_angles)}"
                 f" declared={ctx.declared!r} declared_by={ctx.declared_by}")
     return out

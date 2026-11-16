@@ -488,7 +488,7 @@ function renderTable() {
         <div class="legend"><span>${cardHTML("7H", "sm pen pen-upheld")}penalty upheld: the player drew</span>
           <span>${cardHTML("7S", "sm pen pen-rejected")}false call: the caller drew</span><span>hover a card for the call</span></div></div></div>
     ${v.last_play ? `<div class="lastplay ${v.last_play.mark || ""}"><b>Last play</b>: ${esc(v.last_play.text.replace(/^G\d+ /, ""))}</div>` : ""}
-    ${m ? `<div class="kv"><b>Order</b>: ${m.order.map(P).join(" → ")} (${m.direction === 1 ? "seat order" : "reversed"}) · <b>pot</b> on DISCARD: ${m.pot}</div>` : ""}
+    ${m ? `<div class="kv"><b>Pot</b> on DISCARD: ${m.pot}</div>` : ""}
     ${m && m.declared != null ? `<div class="kv"><b>Declared</b>: “${esc(m.declared)}” by ${P(m.declared_by)}</div>` : ""}
     ${rules}`;
 }

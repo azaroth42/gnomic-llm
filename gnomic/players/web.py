@@ -104,8 +104,6 @@ def view_json(view: PlayerView, *, table: bool = True) -> dict:
     t = view.table
     if t is not None:
         out["mech"] = {
-            "direction": t.direction,
-            "order": [(view.seat + t.direction * k) % n for k in range(n)],
             "tokens": list(t.tokens), "space_tokens": list(t.space_tokens), "pot": t.pot,
             "spaces": [[[str(p.card), p.angle] for p in sp] for sp in t.spaces],
             "declared": t.declared, "declared_by": t.declared_by,

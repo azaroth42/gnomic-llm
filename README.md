@@ -24,14 +24,14 @@ keeps changing under the players' feet.
   newest rule that has a say decides. Calling correctly therefore needs the whole current
   stack, not just your own rule.
 - **The game grows.** From game 3, rules may add table mechanics: tokens, a space in front of
-  each player, cards played at angles, trades, reversing the order of play, skips, extra turns,
-  multi-card plays, peeks, and moving cards or tokens between hands, spaces and DISCARD. From
+  each player, cards played at angles, trades, multi-card plays,
+  peeks, and moving cards or tokens between hands, spaces and DISCARD. From
   game 6, rules may also define new ways to win. Win conditions are checked only at the end of
   the player's own turn.
 - A game with no winner ends after 20 rounds.
 
 Rules come from a library of coded templates (e.g. "you may not play a red card on a black
-card", "Kings may always be played", "playing an 8 reverses the order of play"). Alternatively,
+card", "Kings may always be played", "playing an 8 makes the next player draw 1"). Alternatively,
 with `--propose-rules`, the dealer and winners **make up their own rules** in plain language. A
 coding model turns each rule into a small Python function. The engine checks that function in a
 restricted sandbox and tests that the game stays playable before adding the rule.

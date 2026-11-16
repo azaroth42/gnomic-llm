@@ -2,7 +2,8 @@
 
   gnomic play -p anthropic:claude-opus-5-5 -p openai:gpt-5 -p stats --games 5 --ui
   gnomic play -p web?name=Ann -p anthropic:claude-opus-5-5 -p stats --open   # play in the browser
-  gnomic replay logs/match-....jsonl          # watch a finished match in the UI
+  gnomic replay --seconds-per-turn 2 --open   # pick a finished match from an index, paced
+  gnomic replay logs/match-....jsonl          # watch one finished match in the UI
   gnomic rules                                # list the rule library
 """
 
@@ -134,20 +135,28 @@ def cmd_play(args: argparse.Namespace) -> int:
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
-    from .server import serve
+    from .replay import parse_spt, serve_replays
 
-    bus = EventBus()
-    with open(args.log, encoding="utf-8") as fh:
-        for line in fh:
-            if line.strip():
-                ev = json.loads(line)
-                ev.pop("seq", None)
-                with bus._lock:
-                    ev["seq"] = len(bus.history)
-                    bus.history.append(ev)
-    serve(bus, None, args.host, args.port)
-    url = f"http://{args.host}:{args.port}/"
-    print(f"Replaying {len(bus.history)} events at {url} (Ctrl-C to exit)")
+    spt = None
+    if args.seconds_per_turn is not None:
+        spt = parse_spt(str(args.seconds_per_turn))
+        if spt is None:
+            print("--seconds-per-turn must be a positive number", file=sys.stderr)
+            return 2
+    logs = Path(args.logs)
+    page = "/"
+    if args.log:
+        log = Path(args.log)
+        if not log.is_file():
+            print(f"no such log: {log}", file=sys.stderr)
+            return 2
+        logs, page = log.parent, f"/match/{log.name}"
+    serve_replays(logs, args.host, args.port, seconds_per_turn=spt)
+    url = f"http://{args.host}:{args.port}{page}"
+    pace = f", {spt:g} s per turn" if spt else ", all at once"
+    print(f"Replaying {'matches in ' + str(logs) if page == '/' else args.log}{pace}: {url} (Ctrl-C to exit)")
+    if page != "/":
+        print(f"Index of the matches in {logs}: http://{args.host}:{args.port}/")
     if args.open:
         webbrowser.open(url)
     try:
@@ -197,8 +206,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rule-attempts", type=int, default=3, metavar="N",
                    help="with --propose-rules, how many rules to ask for before using a library rule (default: %(default)s)")
     p.add_argument("--mechanics-from", type=int, default=3, metavar="N",
-                   help="from game N on, rules may add table mechanics (tokens, spaces, angles, trades, reversing, "
-                        "skips, effects, multi-card plays...); 0 disables (default: %(default)s)")
+                   help="from game N on, rules may add table mechanics (tokens, spaces, angles, trades, "
+                        "effects, multi-card plays...); 0 disables (default: %(default)s)")
     p.add_argument("--wins-from", type=int, default=6, metavar="N",
                    help="from game N on, rules may be win conditions (checked only at the end of the player's own "
                         "turn); 0 disables (default: %(default)s)")
@@ -211,8 +220,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--open", action="store_true", help="open the UI (and any web player pages) in a browser")
     p.set_defaults(fn=cmd_play)
 
-    r = sub.add_parser("replay", help="view a finished match log in the UI")
-    r.add_argument("log")
+    r = sub.add_parser("replay", help="watch finished matches in the UI (an index of the logs, or one log)")
+    r.add_argument("log", nargs="?", help="a match log to open directly (default: show the index of --logs)")
+    r.add_argument("--logs", default="logs", help="directory of match logs for the index (default: %(default)s)")
+    r.add_argument("--seconds-per-turn", type=float, default=None, metavar="N",
+                   help="pace the replay: every turn takes N seconds, however long the players took "
+                        "(default: show the whole match at once; the index page can change it)")
     r.add_argument("--host", default="127.0.0.1")
     r.add_argument("--port", type=int, default=8765)
     r.add_argument("--open", action="store_true")

@@ -140,16 +140,17 @@ Your rule is enforced exactly as the engine implements it, and that wording is w
 MECHANICS_PROMPT = """\
 FROM GAME {m}: TABLE MECHANICS
 From game {m} on, the table has more parts, all public, and rules added from then on may use them:
-  ORDER     the order of play (seat order, or reversed)
   TOKENS    each player holds tokens; tokens can also lie in a space or on DISCARD (the pot)
   SPACES    face-up cards in front of each player
   ANGLES    a card on the table lies at 0 (upright), 90, 180 (upside down) or 270, written 9C@90
   DECLARED  the latest declaration made this game
-Rules may also make things happen when a card is played (effects): reverse the order of play, skip a
-player, give an extra turn, make a player draw, move cards and tokens between hands, spaces and DISCARD,
-turn cards, trade cards between hands, or let a player peek at a hidden card. A card moved from one
+Rules may also make things happen when a card is played (effects): make a player draw, move cards and tokens
+between hands, spaces and DISCARD, turn cards, trade cards between hands, or let a player peek at a hidden card. A card moved from one
 hand to another is seen only by those two players. A play's effects happen
-only if no penalty is upheld for it. Rules never change penalties.
+only if no penalty is upheld for it. Rules never change penalties, and play always goes in seat order.
+Every game starts with no tokens and empty spaces. Tokens come into the game only from the bank, and
+cards reach a space only, through effects, so a rule may use tokens or space cards only if some rule
+brings them into the game.
 From game {m}, after PLAY you may add any of these lines (each is optional, in any order):
   PLAY: 5D 5H        several cards at once, played in that order (the last one ends on top). R0, a public
                      rule enforced by the engine: you play exactly one card unless a rule allows more. The
@@ -259,8 +260,6 @@ def render_state(view: PlayerView) -> str:
     ]
     t = view.table
     if t is not None:
-        order = " -> ".join(seat_label((view.seat + t.direction * k) % n) for k in range(n))
-        lines.append(f"ORDER: {order} ({'seat order' if t.direction == 1 else 'reversed'})")
         tok = "TOKENS: " + " ".join(f"{seat_label(i)}={t.tokens[i]}" + (" (you)" if i == view.seat else "")
                                     for i in range(n))
         if any(t.space_tokens):
@@ -339,10 +338,13 @@ def rule_request(view: PlayerView, *, first: bool, feedback: str | None = None,
     if mechanics:
         lines.append(
             f"- This rule starts in game {view.game + 1}, so it may use the TABLE MECHANICS: it may be an effect "
-            "(something that happens when a card is played: reverse the order, skip, extra turn, draws, moving "
+            "(something that happens when a card is played: draws, moving "
             "cards or tokens between hands, spaces and DISCARD, turning cards, trades, peeks), or a restriction or permission about several cards at once, "
-            "ANGLE, SPEND, TARGET, DECLARE, tokens, spaces, angles, the order of play or the latest declaration. "
-            "A rule is exactly one kind. No rule may change what a penalty does.")
+            "ANGLE, SPEND, TARGET, DECLARE, tokens, spaces, angles or the latest declaration. "
+            "A rule is exactly one kind. No rule may change what a penalty does, or the order of play. "
+            "Every game starts with no tokens and empty spaces: a rule may use tokens (including SPEND and the pot) "
+            "or cards in spaces only if a rule in effect, or this rule itself, gives players tokens or puts cards "
+            "into spaces.")
     if wins:
         lines.append(
             "- It may be a WIN CONDITION: another way to win, checked only at the end of a player's own turn. "

@@ -3,7 +3,6 @@
 From game `mechanics_from` (default 3), a new rule may use more than the card and
 DISCARD. The table gains:
 
-  direction     order of play, +1 (seat order) or -1 (reversed)
   tokens        a public count per player, gained and spent through rules
   spaces        face-up cards in front of each player (a "space"), each at an angle
   angles        every card on DISCARD lies at an angle: 0 (upright), 90, 180 (upside down), 270
@@ -33,9 +32,13 @@ draws 1, false caller draws 1"). A play whose penalty is upheld triggers no
 effects (user decision); tokens spent on it stay spent.
 
 Approved effect types (the six from the user, plus the ones the user accepted
-from the proposed list): spaces, tokens, angles, rotation, trading, reversing;
-skip, extra turn, multi-card plays, effect draws, declarations, stealing from
-spaces, peeking. Not approved: passing and drawing instead of playing.
+from the proposed list): spaces, tokens, angles, rotation, trading, multi-card
+plays, effect draws, declarations, stealing from spaces, peeking. Not approved:
+passing and drawing instead of playing. Reversing the order of play, skipping
+players and extra turns were approved, then removed (user decision): the engine
+decides whose turn it is, so nobody can play out of turn, and the engine asking
+someone to play announces a rule that only its owner should know.
+Play always goes in seat order.
 """
 
 from __future__ import annotations
@@ -109,7 +112,6 @@ class Move:
 @dataclass(frozen=True)
 class TableState:
     """Public table state beyond hands and DISCARD, as rules see it."""
-    direction: int = 1
     tokens: tuple[int, ...] = ()          # tokens each player holds (their "hand" of tokens)
     spaces: tuple[tuple[Placed, ...], ...] = ()
     space_tokens: tuple[int, ...] = ()    # tokens lying in each player's space
@@ -157,18 +159,6 @@ class Effects:
         if a not in ANGLES:
             raise ValueError(f"angle must be one of {ANGLES}")
         return a
-
-    def reverse(self) -> None:
-        """Reverse the order of play."""
-        self._add("reverse")
-
-    def skip(self) -> None:
-        """The next player in order loses their turn (call twice to skip two)."""
-        self._add("skip")
-
-    def extra_turn(self) -> None:
-        """The player who just played plays again."""
-        self._add("extra_turn")
 
     # ---- places, for move_card / move_tokens ----
     def hand(self, seat) -> tuple:
@@ -280,6 +270,6 @@ class Effects:
 
 CARD_CHOICES = {"default", "random", "highest", "lowest", "chosen", "newest", "oldest"}
 
-FX_METHODS = {"reverse", "skip", "extra_turn", "gain_tokens", "lose_tokens", "draw", "to_space", "rotate_top",
+FX_METHODS = {"gain_tokens", "lose_tokens", "draw", "to_space", "rotate_top",
               "rotate_space", "steal_to_space", "steal_to_hand", "trade", "peek_deck", "peek_hand",
               "move_card", "move_tokens", "hand", "space", "discard", "bank"}

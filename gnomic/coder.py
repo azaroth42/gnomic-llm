@@ -120,7 +120,7 @@ A move is one or more cards plus options the player chose. Extra ctx fields:
   ctx.spend         tokens the player spends with this move (0 if none); spent tokens are always lost
   ctx.target        the seat the move targets, or None
   ctx.declare       the text the player declares with this move (lowercase), or None
-  ctx.direction     1 = seat order, -1 = reversed;  ctx.next_player is the seat that plays next by default
+  ctx.next_player   the seat that plays next (play always goes in seat order; no rule can change it)
   ctx.tokens        tuple of the tokens each player holds, by seat
   ctx.space_tokens  tuple of the tokens lying in each player's space, by seat;  ctx.pot  tokens lying on DISCARD
   ctx.spaces        tuple, by seat, of the cards in each player's space; each has .card and .angle
@@ -128,9 +128,6 @@ A move is one or more cards plus options the player chose. Extra ctx fields:
   ctx.declared, ctx.declared_by   the latest declaration made this game (before this move) and its seat, or None
   ctx.game          the game number, 0-based
 fx methods (seats are 0-based ints such as ctx.player, ctx.next_player, ctx.target; n is 1..{MAX_COUNT}):
-  fx.reverse()                     reverse the order of play
-  fx.skip()                        the next player loses their turn
-  fx.extra_turn()                  the player who just played plays again
   Places: fx.hand(seat), fx.space(seat), fx.discard(), and for tokens also fx.bank() (the unlimited supply).
   fx.move_card(source, dest, n, which)   move n cards between places, e.g. fx.move_card(fx.hand(ctx.target), fx.hand(ctx.player), 1, "highest")
                     which, from a hand: "random" (default), "highest", "lowest", "chosen" (the GIVE card, only from the
