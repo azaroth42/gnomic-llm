@@ -168,3 +168,34 @@ def test_server_player_routes_and_spectator_key():
         assert status(f"http://127.0.0.1:{port}/play/{web.token}")[0] == 200
     finally:
         server.shutdown()
+
+
+def test_page_marks_penalties_on_discard_from_the_public_log():
+    from gnomic.cards import Card
+    from gnomic.game import PlayerView, PublicEvent
+    from gnomic.players.web import view_json
+
+    c = Card.parse
+    log = (
+        PublicEvent("play", 0, 0, player=1, card=c("5D"), top_before=c("2C")),  # earlier game: ignored
+        PublicEvent("game_start", 1, player=0, card=c("2C")),
+        PublicEvent("play", 1, 0, player=0, card=c("9H"), top_before=c("2C"), calls=(2,), call_rules=(1,),
+                    upheld=True, upheld_by=(2,), penalized=(0,)),
+        PublicEvent("play", 1, 1, player=1, card=c("KS"), top_before=c("9H"), calls=(2,), call_rules=(1,),
+                    upheld=False, penalized=(2,)),
+        PublicEvent("play", 1, 2, player=2, card=c("5H"), top_before=c("KS"), move="5D 5H at 90", engine_call=True,
+                    penalized=(2,)),
+        PublicEvent("play", 1, 3, player=0, card=c("3C"), top_before=c("5H")),
+    )
+    view = PlayerView(seat=0, player_names=("a", "b", "c"), hand=(c("AH"),),
+                      discard=tuple(c(x) for x in ("2C", "9H", "KS", "5D", "5H", "3C")), deck_size=30,
+                      hand_sizes=(1, 5, 5), game=1, num_games=3, turn=4, num_rules=1, scores=(1, 0, 0), log=log)
+    v = view_json(view)
+    marks = {card: m["mark"] for card, m in v["pile_marks"].items()}
+    assert marks == {"9H": "upheld", "KS": "rejected", "5D": "upheld", "5H": "upheld"}
+    assert "P3 under R1 (upheld)" in v["pile_marks"]["9H"]["text"]
+    assert v["last_play"]["mark"] is None and "3C" in v["last_play"]["text"]
+    # After a reshuffle only the top card keeps its mark.
+    view2 = PlayerView(**{**view.__dict__, "log": log + (PublicEvent("reshuffle", 1, 4, card=c("3C"), detail="5"),),
+                          "discard": (c("3C"),)})
+    assert view_json(view2)["pile_marks"] == {}
